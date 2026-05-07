@@ -2,8 +2,12 @@
 
 FROM node:20-alpine AS build
 WORKDIR /src
+ENV NODE_OPTIONS=--max-old-space-size=1024 \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_PROGRESS=false
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund --prefer-offline --loglevel=error || npm install --no-audit --no-fund --loglevel=error
 COPY . .
 ARG VITE_API_BASE_URL
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
