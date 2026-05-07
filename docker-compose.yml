@@ -1,0 +1,49 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      HTTP_ADDR: ":2087"
+      PUBLIC_STREAM_URL: ${PUBLIC_STREAM_URL}
+      CACHE_DIR: /data/cache
+      SIGNING_SECRET: ${SIGNING_SECRET}
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      MAX_WORKERS: ${MAX_WORKERS:-20}
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-15000}
+    volumes:
+      - restream-cache:/data/cache
+    expose:
+      - "2087"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:2087/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    labels:
+      # Coolify will set the FQDN; this hints which port to route to
+      - coolify.managed=true
+      - traefik.http.services.backend.loadbalancer.server.port=2087
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      - backend
+    labels:
+      - coolify.managed=true
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+
+volumes:
+  restream-cache:

@@ -1,0 +1,27 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Go
+backend/bin/
+backend/data/
+backend/*.exe
+
+# Local cache & logs
+cache/
+*.log
+
+# Frontend
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/.vercel/
+frontend/.wrangler/
+frontend/build/
+frontend/.env
+frontend/.env.*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/

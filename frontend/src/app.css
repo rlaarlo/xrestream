@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  background: #f8fafc;
+}
+
+body {
+  min-width: 320px;
+}
+
+.table :where(th, td) {
+  white-space: nowrap;
+}
+
+.url-cell {
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,0 +1,33 @@
+{
+  "name": "restream-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+  },
+  "overrides": {
+    "cookie": "^0.7.2",
+    "esbuild": "^0.25.0"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.16.1",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@types/node": "^25.6.0",
+    "autoprefixer": "^10.4.20",
+    "daisyui": "^4.12.23",
+    "postcss": "^8.5.1",
+    "svelte": "^5.19.0",
+    "svelte-check": "^4.1.4",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11"
+  },
+  "dependencies": {
+    "hls.js": "^1.6.16"
+  }
+}

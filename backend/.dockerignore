@@ -1,0 +1,11 @@
+# Build artifacts
+bin/
+cache/
+*.log
+.env
+.env.*
+.git
+.github
+docs
+deploy
+README.md

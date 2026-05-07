@@ -1,0 +1,16 @@
+[Unit]
+Description=Restream HLS Relay API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/restream/backend
+ExecStart=/opt/restream/backend/restream-api
+EnvironmentFile=/opt/restream/.env
+Restart=always
+RestartSec=3
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
