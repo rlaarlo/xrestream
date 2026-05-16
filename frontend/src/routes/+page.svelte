@@ -335,6 +335,43 @@
     return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
   }
 
+  function relTime(iso?: string) {
+    if (!iso) return '';
+    const t = new Date(iso).getTime();
+    if (!t) return '';
+    const diff = Math.max(0, Date.now() - t);
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ${m % 60}m ago`;
+    const d = Math.floor(h / 24);
+    return `${d}d ${h % 24}h ago`;
+  }
+
+  function uptime(iso?: string) {
+    if (!iso) return '';
+    const t = new Date(iso).getTime();
+    if (!t) return '';
+    const diff = Math.max(0, Date.now() - t);
+    const s = Math.floor(diff / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ${m % 60}m`;
+    const d = Math.floor(h / 24);
+    return `${d}d ${h % 24}h`;
+  }
+
+  function srcStatusColor(code?: number) {
+    if (!code) return 'text-base-content/40';
+    if (code >= 200 && code < 300) return 'text-success';
+    if (code >= 300 && code < 400) return 'text-info';
+    return 'text-error';
+  }
+
   function modeBadge(mode: Mode) {
     if (mode === 'transmux') return 'badge-primary';
     if (mode === 'ingest') return 'badge-info';
@@ -516,9 +553,27 @@
                             <span class="badge {statusBadge(channel.status)} badge-sm">{channel.status}</span>
                           </td>
                           <td>
-                            <span class="badge {workerBadge(channel.workerStatus)} badge-sm">
+                            <span
+                              class="badge {workerBadge(channel.workerStatus)} badge-sm"
+                              title={channel.workerStartedAt
+                                ? `Started ${new Date(channel.workerStartedAt).toLocaleString()}`
+                                : ''}
+                            >
                               {channel.workerStatus}
                             </span>
+                            {#if channel.workerStatus === 'running' && channel.workerStartedAt}
+                              <div class="text-[10px] text-base-content/60 mt-0.5">
+                                up {uptime(channel.workerStartedAt)}
+                              </div>
+                            {/if}
+                            {#if channel.lastSourceFetchAt}
+                              <div
+                                class="text-[10px] {srcStatusColor(channel.lastSourceStatus)} mt-0.5"
+                                title={`Last source check: ${new Date(channel.lastSourceFetchAt).toLocaleString()}`}
+                              >
+                                src {channel.lastSourceStatus ?? '—'} · {relTime(channel.lastSourceFetchAt)}
+                              </div>
+                            {/if}
                           </td>
                           <td class="w-[3.5rem]">
                             <button

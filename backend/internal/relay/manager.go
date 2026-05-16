@@ -31,12 +31,14 @@ type Manager struct {
 	client *http.Client
 	signer Signer
 	cache  DiskCache
+	r2     *R2Client
 
 	mu        sync.RWMutex
 	playlists map[string]cachedPlaylist
 	assets    map[string]map[string]string
-	workers   map[string]context.CancelFunc
+	workers   map[string]*workerHandle
 	group     singleflight.Group
+	r2Ready   sync.Map
 
 	viewersMu sync.Mutex
 	viewers   map[string]map[string]time.Time // channelID -> ip -> lastSeen
@@ -47,7 +49,11 @@ type cachedPlaylist struct {
 	expiresAt time.Time
 }
 
-func NewManager(store *store.Store, cfg config.Config, logger *slog.Logger) *Manager {
+type workerHandle struct {
+	cancel context.CancelFunc
+}
+
+func NewManager(store *store.Store, cfg config.Config, logger *slog.Logger, r2 *R2Client) *Manager {
 	return &Manager{
 		store:     store,
 		cfg:       cfg,
@@ -55,9 +61,10 @@ func NewManager(store *store.Store, cfg config.Config, logger *slog.Logger) *Man
 		client:    &http.Client{Timeout: time.Duration(cfg.UpstreamTimeoutMS) * time.Millisecond},
 		signer:    NewSigner(cfg.SigningSecret),
 		cache:     NewDiskCache(cfg.CacheDir),
+		r2:        r2,
 		playlists: map[string]cachedPlaylist{},
 		assets:    map[string]map[string]string{},
-		workers:   map[string]context.CancelFunc{},
+		workers:   map[string]*workerHandle{},
 		viewers:   map[string]map[string]time.Time{},
 	}
 }
@@ -71,6 +78,11 @@ func (m *Manager) RegisterAsset(slug, sourceURL string) (string, string) {
 	}
 	m.assets[slug][ref] = sourceURL
 	m.mu.Unlock()
+	if m.r2 != nil {
+		if _, ready := m.r2Ready.Load(slug + ":" + ref); ready {
+			return ref, m.r2.PublicURL(slug, ref)
+		}
+	}
 	return ref, fmt.Sprintf("/proxy/%s/asset?ref=%s&sig=%s", url.PathEscape(slug), ref, sig)
 }
 
@@ -100,7 +112,8 @@ func (m *Manager) StartWorker(parent context.Context, channel store.Channel) {
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
-	m.workers[channel.ID] = cancel
+	handle := &workerHandle{cancel: cancel}
+	m.workers[channel.ID] = handle
 	m.mu.Unlock()
 
 	if err := m.store.SetWorkerStatus(parent, channel.ID, "running", nil); err != nil {
@@ -108,17 +121,28 @@ func (m *Manager) StartWorker(parent context.Context, channel store.Channel) {
 	}
 
 	if channel.Mode == "transmux" {
-		go m.transmuxLoop(ctx, channel)
+		go m.transmuxLoop(ctx, channel, handle)
 		return
 	}
-	go m.workerLoop(ctx, channel)
+	go m.workerLoop(ctx, channel, handle)
 }
 
 func (m *Manager) StopWorker(channelID string) {
 	m.mu.Lock()
-	cancel, exists := m.workers[channelID]
+	handle, exists := m.workers[channelID]
 	if exists {
-		cancel()
+		handle.cancel()
+		delete(m.workers, channelID)
+	}
+	m.mu.Unlock()
+}
+
+// releaseWorker removes the worker entry only if it's still the same handle.
+// Used by worker goroutines in defer so a stale goroutine cannot cancel a
+// freshly-started successor (PATCH calls StopWorker+StartWorker in sequence).
+func (m *Manager) releaseWorker(channelID string, h *workerHandle) {
+	m.mu.Lock()
+	if cur, ok := m.workers[channelID]; ok && cur == h {
 		delete(m.workers, channelID)
 	}
 	m.mu.Unlock()
@@ -126,8 +150,8 @@ func (m *Manager) StopWorker(channelID string) {
 
 func (m *Manager) StopAll() {
 	m.mu.Lock()
-	for id, cancel := range m.workers {
-		cancel()
+	for id, handle := range m.workers {
+		handle.cancel()
 		delete(m.workers, id)
 	}
 	m.mu.Unlock()
@@ -315,6 +339,22 @@ func (m *Manager) PurgeChannel(slug string) error {
 	delete(m.playlists, slug)
 	delete(m.assets, slug)
 	m.mu.Unlock()
+	prefix := slug + ":"
+	m.r2Ready.Range(func(k, v any) bool {
+		if ks, ok := k.(string); ok && strings.HasPrefix(ks, prefix) {
+			m.r2Ready.Delete(k)
+		}
+		return true
+	})
+	if m.r2 != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := m.r2.DeleteFolder(ctx, slug); err != nil {
+				m.logger.Warn("r2: delete folder failed", "slug", slug, "error", err)
+			}
+		}()
+	}
 	_ = os.RemoveAll(m.transmuxDir(slug))
 	return m.cache.PurgeChannel(slug)
 }
@@ -325,11 +365,11 @@ func (m *Manager) assetSource(slug, ref string) string {
 	return m.assets[slug][ref]
 }
 
-func (m *Manager) workerLoop(ctx context.Context, channel store.Channel) {
+func (m *Manager) workerLoop(ctx context.Context, channel store.Channel, handle *workerHandle) {
 	logger := m.logger.With("channel", channel.Slug, "channelId", channel.ID)
 	_ = m.store.SetWorkerStatus(context.Background(), channel.ID, "running", nil)
 	defer func() {
-		m.StopWorker(channel.ID)
+		m.releaseWorker(channel.ID, handle)
 		_ = m.store.SetWorkerStatus(context.Background(), channel.ID, "stopped", nil)
 	}()
 
@@ -429,7 +469,29 @@ func (m *Manager) fetchAndCache(ctx context.Context, channel store.Channel, ref,
 		return err
 	}
 	m.store.IncrementMetric(ctx, channel.ID, "bytes_upstream", written)
+	if channel.SyncEnabled && m.r2 != nil {
+		go m.uploadToR2(channel.Slug, ref, sourceURL)
+	}
 	return nil
+}
+
+func (m *Manager) uploadToR2(slug, ref, sourceURL string) {
+	if _, exists := m.r2Ready.Load(slug + ":" + ref); exists {
+		return
+	}
+	file, _, err := m.cache.Open(slug, ref)
+	if err != nil {
+		m.logger.Warn("r2: open cache failed", "slug", slug, "ref", ref, "error", err)
+		return
+	}
+	defer file.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.r2.Upload(ctx, slug, ref, file, contentTypeForURL(sourceURL)); err != nil {
+		m.logger.Warn("r2: upload failed", "slug", slug, "ref", ref, "error", err)
+		return
+	}
+	m.r2Ready.Store(slug+":"+ref, true)
 }
 
 func (m *Manager) cleanupLoop(ctx context.Context) {
@@ -444,6 +506,54 @@ func (m *Manager) cleanupLoop(ctx context.Context) {
 				m.logger.Warn("cache cleanup failed", "error", err)
 			}
 		}
+	}
+}
+
+// r2RetentionLoop deletes R2 objects for a channel older than the configured
+// retention window so live-stream segments don't pile up indefinitely.
+func (m *Manager) r2RetentionLoop(ctx context.Context, channel store.Channel) {
+	if m.r2 == nil {
+		return
+	}
+	retention := time.Duration(m.cfg.R2RetentionSecs) * time.Second
+	if retention <= 0 {
+		return
+	}
+	logger := m.logger.With("channel", channel.Slug, "channelId", channel.ID)
+	logger.Info("r2: retention loop started", "retention", retention.String())
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		keys, err := m.r2.ListOlderThan(listCtx, channel.Slug, retention)
+		cancel()
+		if err != nil {
+			logger.Warn("r2: retention list failed", "error", err)
+			continue
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		delCtx, cancelDel := context.WithTimeout(ctx, 60*time.Second)
+		if err := m.r2.DeleteKeys(delCtx, keys); err != nil {
+			logger.Warn("r2: retention delete failed", "count", len(keys), "error", err)
+		} else {
+			logger.Info("r2: retention deleted", "count", len(keys))
+			// Forget r2Ready entries so the keys can be re-uploaded if ffmpeg
+			// somehow recreates them (shouldn't happen but cheap insurance).
+			for _, key := range keys {
+				parts := strings.SplitN(key, "/", 2)
+				if len(parts) == 2 {
+					m.r2Ready.Delete(parts[0] + ":" + parts[1])
+				}
+			}
+		}
+		cancelDel()
 	}
 }
 
@@ -566,7 +676,13 @@ func (m *Manager) readTransmuxPlaylist(channel store.Channel) (string, error) {
 			}
 		}
 		flushHeader()
-		out = append(out, fmt.Sprintf("segment/%s", trimmed))
+		segURL := fmt.Sprintf("segment/%s", trimmed)
+		if m.r2 != nil && channel.SyncEnabled {
+			if _, ready := m.r2Ready.Load(channel.Slug + ":" + trimmed); ready {
+				segURL = m.r2.PublicURL(channel.Slug, trimmed)
+			}
+		}
+		out = append(out, segURL)
 	}
 
 	// Adjust MEDIA-SEQUENCE only when we trimmed from the front.
@@ -627,11 +743,91 @@ func (m *Manager) ServeTransmuxSegment(ctx context.Context, slug, name string) (
 	}, channel.ID, nil
 }
 
-func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel) {
+// transmuxR2Watcher scans the transmux dir for new .ts segments and uploads
+// them to R2. Marks them ready so the playlist rewriter can emit the public
+// R2 URL instead of the local /proxy path.
+func (m *Manager) transmuxR2Watcher(ctx context.Context, channel store.Channel, dir string) {
+	if m.r2 == nil {
+		return
+	}
+	logger := m.logger.With("channel", channel.Slug, "channelId", channel.ID, "mode", "transmux")
+	logger.Info("r2: transmux watcher started", "dir", dir)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			logger.Warn("r2: readdir failed", "error", err)
+			continue
+		}
+		uploaded := 0
+		skipped := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".ts") {
+				continue
+			}
+			key := channel.Slug + ":" + name
+			if _, exists := m.r2Ready.Load(key); exists {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			// Only upload segments that finished writing >=2s ago to avoid
+			// racing ffmpeg's still-open file handle.
+			if time.Since(info.ModTime()) < 2*time.Second {
+				skipped++
+				continue
+			}
+			path := filepath.Join(dir, name)
+			f, err := os.Open(path)
+			if err != nil {
+				logger.Warn("r2: open segment failed", "name", name, "error", err)
+				continue
+			}
+			upCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err = m.r2.Upload(upCtx, channel.Slug, name, f, "video/mp2t")
+			cancel()
+			_ = f.Close()
+			if err != nil {
+				logger.Warn("r2: transmux upload failed", "name", name, "error", err)
+				continue
+			}
+			m.r2Ready.Store(key, true)
+			uploaded++
+
+			// Delete the local file once it's older than the configured
+			// retention window — viewers fetching the playlist now get the
+			// R2 URL directly, so the local copy is dead weight. Keep a
+			// small grace window so any in-flight local fetch can finish.
+			localRetention := time.Duration(m.cfg.LocalRetentionSecs) * time.Second
+			if localRetention > 0 && time.Since(info.ModTime()) > localRetention {
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					logger.Warn("r2: local cleanup failed", "name", name, "error", err)
+				}
+			}
+		}
+		if uploaded > 0 {
+			logger.Info("r2: transmux uploaded", "count", uploaded, "skipped", skipped)
+		}
+	}
+}
+
+func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handle *workerHandle) {
 	logger := m.logger.With("channel", channel.Slug, "channelId", channel.ID, "mode", "transmux")
 	_ = m.store.SetWorkerStatus(context.Background(), channel.ID, "running", nil)
 	defer func() {
-		m.StopWorker(channel.ID)
+		m.releaseWorker(channel.ID, handle)
 		_ = m.store.SetWorkerStatus(context.Background(), channel.ID, "stopped", nil)
 	}()
 
@@ -642,6 +838,16 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel) {
 		return
 	}
 	playlistPath := filepath.Join(dir, "index.m3u8")
+
+	if m.r2 != nil && channel.SyncEnabled {
+		go m.transmuxR2Watcher(ctx, channel, dir)
+		go m.r2RetentionLoop(ctx, channel)
+	}
+
+	// Track consecutive ffmpeg failures so we can auto-disable a channel
+	// whose upstream is broken. Avoids hammering the source and getting banned.
+	var firstFailureAt time.Time
+	sourceErrorAfter := time.Duration(m.cfg.SourceErrorAfterSecs) * time.Second
 
 	backoff := time.Second
 	for {
@@ -672,6 +878,8 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel) {
 			"-i", channel.InputURL,
 			"-map", "0",
 			"-c", "copy",
+			// Tag HEVC streams as hvc1 (Apple-style) so Safari/Edge recognize them.
+			"-tag:v", "hvc1",
 			"-copyts",
 			"-muxdelay", "0",
 			"-muxpreload", "0",
@@ -698,6 +906,14 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel) {
 			_ = m.store.SetWorkerStatus(context.Background(), channel.ID, "error", &message)
 			m.store.IncrementMetric(context.Background(), channel.ID, "worker_errors", 1)
 			logger.Warn("ffmpeg start failed", "error", startErr)
+			if firstFailureAt.IsZero() {
+				firstFailureAt = time.Now()
+			}
+			if sourceErrorAfter > 0 && time.Since(firstFailureAt) > sourceErrorAfter {
+				_ = m.store.SetSourceStatus(context.Background(), channel.ID, 0, &message)
+				logger.Warn("channel auto-disabled: ffmpeg failing too long", "duration", time.Since(firstFailureAt).String())
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -706,6 +922,11 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel) {
 			backoff = nextBackoff(backoff)
 			continue
 		}
+
+		// ffmpeg started successfully — clear any prior "error" status.
+		_ = m.store.SetWorkerStatus(context.Background(), channel.ID, "running", nil)
+		backoff = time.Second
+		ffmpegStartedAt := time.Now()
 
 		if stderr != nil {
 			go func() {
@@ -732,7 +953,20 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel) {
 		}
 		_ = m.store.SetWorkerStatus(context.Background(), channel.ID, "error", &message)
 		m.store.IncrementMetric(context.Background(), channel.ID, "worker_errors", 1)
-		logger.Warn("ffmpeg exited", "error", waitErr, "backoff", backoff.String())
+		logger.Warn("ffmpeg exited", "error", waitErr, "backoff", backoff.String(), "ran", time.Since(ffmpegStartedAt).String())
+
+		// If ffmpeg stayed up for at least 30s it counts as healthy — reset
+		// the failure window so transient blips don't trigger auto-disable.
+		if time.Since(ffmpegStartedAt) > 30*time.Second {
+			firstFailureAt = time.Time{}
+		} else if firstFailureAt.IsZero() {
+			firstFailureAt = ffmpegStartedAt
+		}
+		if sourceErrorAfter > 0 && !firstFailureAt.IsZero() && time.Since(firstFailureAt) > sourceErrorAfter {
+			_ = m.store.SetSourceStatus(context.Background(), channel.ID, 0, &message)
+			logger.Warn("channel auto-disabled: ffmpeg failing too long", "duration", time.Since(firstFailureAt).String())
+			return
+		}
 
 		select {
 		case <-ctx.Done():

@@ -97,6 +97,9 @@ func (s *Server) channels(w http.ResponseWriter, r *http.Request) {
 			serverError(w, err)
 			return
 		}
+		for i := range channels {
+			s.applyPublicPlaylistURL(&channels[i])
+		}
 		writeJSON(w, http.StatusOK, channels)
 	case http.MethodPost:
 		input, ok := s.decodeChannelInput(w, r)
@@ -113,10 +116,27 @@ func (s *Server) channels(w http.ResponseWriter, r *http.Request) {
 				s.relay.StartWorker(s.rootCtx, channel)
 			}
 		}
+		s.applyPublicPlaylistURL(&channel)
 		writeJSON(w, http.StatusCreated, channel)
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// applyPublicPlaylistURL always rewrites the channel's playlistUrl using the
+// currently configured PublicStreamURL. This ensures that records persisted
+// with an older base URL (e.g. http://localhost:3000) are still served with
+// the up-to-date public URL without requiring a database migration.
+func (s *Server) applyPublicPlaylistURL(channel *store.Channel) {
+	if channel == nil || channel.Slug == "" {
+		return
+	}
+	base := strings.TrimRight(s.cfg.PublicStreamURL, "/")
+	if base == "" {
+		return
+	}
+	url := fmt.Sprintf("%s/proxy/%s/index.m3u8", base, channel.Slug)
+	channel.PlaylistURL = &url
 }
 
 func (s *Server) channelByID(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +243,7 @@ func (s *Server) handleChannelRecord(w http.ResponseWriter, r *http.Request, id 
 			handleStoreError(w, err)
 			return
 		}
+		s.applyPublicPlaylistURL(&channel)
 		writeJSON(w, http.StatusOK, channel)
 	case http.MethodPatch:
 		input, ok := s.decodeChannelInput(w, r)
@@ -238,6 +259,7 @@ func (s *Server) handleChannelRecord(w http.ResponseWriter, r *http.Request, id 
 		if (channel.Mode == "ingest" || channel.Mode == "transmux") && channel.Status == "active" {
 			s.relay.StartWorker(s.rootCtx, channel)
 		}
+		s.applyPublicPlaylistURL(&channel)
 		writeJSON(w, http.StatusOK, channel)
 	case http.MethodDelete:
 		channel, err := s.store.GetChannel(r.Context(), id)

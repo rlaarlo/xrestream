@@ -35,7 +35,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	relayManager := relay.NewManager(database, cfg, logger)
+	var r2Client *relay.R2Client
+	if cfg.R2AccountID != "" && cfg.R2Bucket != "" && cfg.R2AccessKeyID != "" && cfg.R2SecretAccessKey != "" {
+		r2Client = relay.NewR2Client(cfg.R2AccountID, cfg.R2AccessKeyID, cfg.R2SecretAccessKey, cfg.R2Bucket, cfg.R2PublicURL)
+		logger.Info("r2 sync enabled", "bucket", cfg.R2Bucket)
+	}
+
+	relayManager := relay.NewManager(database, cfg, logger, r2Client)
 	if err := relayManager.StartActiveWorkers(ctx); err != nil {
 		logger.Warn("active worker bootstrap failed", "error", err)
 	}

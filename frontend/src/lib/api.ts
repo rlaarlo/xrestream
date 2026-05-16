@@ -17,6 +17,9 @@ export type Channel = {
   lastSourceFetchAt?: string;
   lastSourceStatus?: number;
   lastError?: string;
+  workerStartedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type ChannelInput = {

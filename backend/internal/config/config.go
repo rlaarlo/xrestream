@@ -19,6 +19,14 @@ type Config struct {
 	AdminPassword     string
 	MaxWorkers        int
 	UpstreamTimeoutMS int
+	R2AccountID       string
+	R2AccessKeyID     string
+	R2SecretAccessKey string
+	R2Bucket          string
+	R2PublicURL       string
+	R2RetentionSecs   int
+	LocalRetentionSecs int
+	SourceErrorAfterSecs int
 }
 
 func Load() Config {
@@ -36,6 +44,14 @@ func Load() Config {
 		AdminPassword:     os.Getenv("ADMIN_PASSWORD"),
 		MaxWorkers:        getEnvInt("MAX_WORKERS", 20),
 		UpstreamTimeoutMS: getEnvInt("UPSTREAM_TIMEOUT_MS", 15000),
+		R2AccountID:       os.Getenv("R2_ACCOUNT_ID"),
+		R2AccessKeyID:     os.Getenv("R2_ACCESS_KEY_ID"),
+		R2SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
+		R2Bucket:          os.Getenv("R2_BUCKET"),
+		R2PublicURL:       strings.TrimRight(os.Getenv("R2_PUBLIC_URL"), "/"),
+		R2RetentionSecs:   getEnvInt("R2_RETENTION_SECONDS", 600),
+		LocalRetentionSecs: getEnvInt("LOCAL_RETENTION_SECONDS", 60),
+		SourceErrorAfterSecs: getEnvInt("SOURCE_ERROR_AFTER_SECONDS", 300),
 	}
 	if cfg.AdminPassword == "" {
 		cfg.AdminPassword = cfg.AdminToken
