@@ -15,9 +15,15 @@ type Channel struct {
 	PlaylistTTLSeconds int        `json:"playlistTtlSeconds"`
 	SegmentTTLSeconds  int        `json:"segmentTtlSeconds"`
 	IngestPollSeconds  int        `json:"ingestPollSeconds"`
-	CacheEnabled       bool       `json:"cacheEnabled"`
-	SyncEnabled        bool       `json:"syncEnabled"`
-	SyncDelaySeconds   int        `json:"syncDelaySeconds"`
+	CacheEnabled          bool    `json:"cacheEnabled"`
+	SyncEnabled           bool    `json:"syncEnabled"`
+	SyncDelaySeconds      int     `json:"syncDelaySeconds"`
+	PlaybackTokenRequired bool    `json:"playbackTokenRequired"`
+	HTTPReferer        string     `json:"httpReferer"`
+	HTTPUserAgent      string     `json:"httpUserAgent"`
+	HTTPOrigin         string     `json:"httpOrigin"`
+	OwnerID            *string    `json:"ownerId,omitempty"`
+	NodeID             *string    `json:"nodeId,omitempty"`
 	LastRequestAt      *time.Time `json:"lastRequestAt,omitempty"`
 	LastSourceFetchAt  *time.Time `json:"lastSourceFetchAt,omitempty"`
 	LastSourceStatus   *int       `json:"lastSourceStatus,omitempty"`
@@ -36,9 +42,14 @@ type ChannelInput struct {
 	PlaylistTTLSeconds int    `json:"playlistTtlSeconds"`
 	SegmentTTLSeconds  int    `json:"segmentTtlSeconds"`
 	IngestPollSeconds  int    `json:"ingestPollSeconds"`
-	CacheEnabled       *bool  `json:"cacheEnabled"`
-	SyncEnabled        *bool  `json:"syncEnabled"`
-	SyncDelaySeconds   int    `json:"syncDelaySeconds"`
+	CacheEnabled          *bool  `json:"cacheEnabled"`
+	SyncEnabled           *bool  `json:"syncEnabled"`
+	SyncDelaySeconds      int    `json:"syncDelaySeconds"`
+	PlaybackTokenRequired *bool  `json:"playbackTokenRequired"`
+	HTTPReferer        string  `json:"httpReferer"`
+	HTTPUserAgent      string  `json:"httpUserAgent"`
+	HTTPOrigin         string  `json:"httpOrigin"`
+	NodeID             *string `json:"nodeId,omitempty"`
 }
 
 type Metrics struct {
@@ -50,4 +61,54 @@ type Metrics struct {
 	BytesSent        int64 `json:"bytesSent"`
 	BytesUpstream    int64 `json:"bytesUpstream"`
 	WorkerErrors     int64 `json:"workerErrors"`
+}
+
+type AllowedOrigin struct {
+	ID        string    `json:"id"`
+	OwnerID   *string   `json:"ownerId,omitempty"`
+	Origin    string    `json:"origin"`
+	Label     string    `json:"label"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type User struct {
+	ID           string     `json:"id"`
+	Username     string     `json:"username"`
+	Role         string     `json:"role"`
+	Enabled      bool       `json:"enabled"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
+	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty"`
+}
+
+type Node struct {
+	ID         string     `json:"id"`
+	OwnerID    string     `json:"ownerId"`
+	Name       string     `json:"name"`
+	Host       string     `json:"host"`
+	Status     string     `json:"status"`
+	LastSeenAt *time.Time `json:"lastSeenAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+}
+
+type R2Config struct {
+	ID              string    `json:"id"`
+	OwnerID         string    `json:"ownerId"`
+	AccountID       string    `json:"accountId"`
+	AccessKeyID     string    `json:"accessKeyId"`
+	SecretAccessKey string    `json:"secretAccessKey,omitempty"`
+	Bucket          string    `json:"bucket"`
+	PublicURL       string    `json:"publicUrl"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+type Session struct {
+	Token     string
+	UserID    string
+	Username  string
+	Role      string
+	ExpiresAt time.Time
 }

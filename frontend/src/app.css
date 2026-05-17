@@ -2,16 +2,33 @@
 @tailwind components;
 @tailwind utilities;
 
-html {
-  background: #f8fafc;
+:root {
+  color-scheme: light;
+}
+
+html[data-theme='restream-dark'] {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: hsl(var(--b2));
+  color: hsl(var(--bc));
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
   min-width: 320px;
 }
 
+/* Tables: tighter, scannable rows with theme-aware borders. */
 .table :where(th, td) {
   white-space: nowrap;
+}
+.table thead th {
+  letter-spacing: 0.04em;
 }
 
 .url-cell {
@@ -19,4 +36,70 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Subtle, themed scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--bc) / 0.25) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--bc) / 0.22);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--bc) / 0.4);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Focus ring polish that respects theme tokens. */
+:where(button, [role='button'], a, input, select, textarea):focus-visible {
+  outline: 2px solid hsl(var(--p));
+  outline-offset: 2px;
+  border-radius: 0.4rem;
+}
+
+/* Live status dot used in topbar / status badges. */
+.status-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: currentColor;
+  box-shadow: 0 0 0 0 currentColor;
+  animation: status-pulse 2s ease-out infinite;
+}
+@keyframes status-pulse {
+  0% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  70% { box-shadow: 0 0 0 6px transparent; opacity: 0.85; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+
+/* Sticky table head used on data grids. */
+.table-sticky thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background-color: hsl(var(--b2) / 0.95);
+  backdrop-filter: saturate(180%) blur(6px);
+}
+
+/* Soft surface utility used on cards / KPI tiles. */
+.surface {
+  background-color: hsl(var(--b1));
+  border: 1px solid hsl(var(--b3));
+  border-radius: var(--rounded-box, 0.9rem);
+}
+
+/* Make video.js controls blend with theme darkness. */
+.video-js .vjs-control-bar {
+  background-color: hsl(0 0% 0% / 0.55);
 }

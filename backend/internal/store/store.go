@@ -92,7 +92,88 @@ create unique index if not exists channel_metrics_channel_window_unique_idx on c
 	}
 	_, _ = s.pool.Exec(ctx, `alter table channels add column if not exists sync_enabled boolean not null default false`)
 	_, err = s.pool.Exec(ctx, `alter table channels add column if not exists sync_delay_seconds integer not null default 30`)
-	return err
+	if err != nil {
+		return err
+	}
+	_, _ = s.pool.Exec(ctx, `alter table channels add column if not exists http_referer text not null default ''`)
+	_, _ = s.pool.Exec(ctx, `alter table channels add column if not exists http_user_agent text not null default ''`)
+	_, err = s.pool.Exec(ctx, `alter table channels add column if not exists http_origin text not null default ''`)
+	if err != nil {
+		return err
+	}
+	_, _ = s.pool.Exec(ctx, `alter table channels add column if not exists playback_token_required boolean not null default true`)
+
+	_, err = s.pool.Exec(ctx, `
+create table if not exists allowed_origins (
+  id          uuid        primary key default gen_random_uuid(),
+  origin      text        not null unique,
+  label       text        not null default '',
+  enabled     boolean     not null default true,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table if not exists users (
+  id            uuid        primary key default gen_random_uuid(),
+  username      text        not null unique,
+  password_hash text        not null,
+  role          text        not null default 'admin',
+  enabled       boolean     not null default true,
+  last_login_at timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  constraint users_role_check check (role in ('admin', 'viewer'))
+);
+
+create table if not exists sessions (
+  token        text        primary key,
+  user_id      uuid        not null references users(id) on delete cascade,
+  expires_at   timestamptz not null,
+  created_at   timestamptz not null default now(),
+  last_used_at timestamptz not null default now()
+);
+
+create index if not exists sessions_user_idx on sessions (user_id);
+create index if not exists sessions_expires_idx on sessions (expires_at);
+
+create table if not exists nodes (
+  id            uuid        primary key default gen_random_uuid(),
+  owner_id      uuid        not null references users(id) on delete cascade,
+  name          text        not null,
+  host          text        not null default '',
+  api_key_hash  text        not null,
+  status        text        not null default 'pending',
+  last_seen_at  timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  constraint nodes_status_check check (status in ('pending', 'online', 'offline'))
+);
+create index if not exists nodes_owner_idx on nodes (owner_id);
+
+create table if not exists r2_configs (
+  id                uuid        primary key default gen_random_uuid(),
+  owner_id          uuid        not null unique references users(id) on delete cascade,
+  account_id        text        not null,
+  access_key_id     text        not null,
+  secret_access_key text        not null,
+  bucket            text        not null,
+  public_url        text        not null default '',
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+alter table channels add column if not exists owner_id uuid references users(id) on delete set null;
+alter table channels add column if not exists node_id  uuid references nodes(id) on delete set null;
+create index if not exists channels_owner_idx on channels (owner_id);
+create index if not exists channels_node_idx  on channels (node_id);
+`)
+	if err != nil {
+		return err
+	}
+	_, _ = s.pool.Exec(ctx, `alter table allowed_origins add column if not exists owner_id uuid references users(id) on delete cascade`)
+	_, _ = s.pool.Exec(ctx, `alter table allowed_origins drop constraint if exists allowed_origins_origin_key`)
+	_, _ = s.pool.Exec(ctx, `create unique index if not exists allowed_origins_owner_origin_idx on allowed_origins (coalesce(owner_id, '00000000-0000-0000-0000-000000000000'::uuid), origin)`)
+	return nil
 }
 
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
@@ -109,6 +190,40 @@ func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 			return nil, err
 		}
 		channels = append(channels, channel)
+	}
+	return channels, rows.Err()
+}
+
+func (s *Store) ListChannelsForOwner(ctx context.Context, ownerID string) ([]Channel, error) {
+	rows, err := s.pool.Query(ctx, baseChannelSelect+` where owner_id = $1 order by created_at desc`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	channels := []Channel{}
+	for rows.Next() {
+		c, err := scanChannel(rows)
+		if err != nil {
+			return nil, err
+		}
+		channels = append(channels, c)
+	}
+	return channels, rows.Err()
+}
+
+func (s *Store) ListChannelsForNode(ctx context.Context, nodeID string) ([]Channel, error) {
+	rows, err := s.pool.Query(ctx, baseChannelSelect+` where node_id = $1 and status = 'active' order by created_at asc`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	channels := []Channel{}
+	for rows.Next() {
+		c, err := scanChannel(rows)
+		if err != nil {
+			return nil, err
+		}
+		channels = append(channels, c)
 	}
 	return channels, rows.Err()
 }
@@ -141,14 +256,18 @@ func (s *Store) GetChannelBySlug(ctx context.Context, slug string) (Channel, err
 	return scanChannel(row)
 }
 
-func (s *Store) CreateChannel(ctx context.Context, input ChannelInput, publicStreamURL string) (Channel, error) {
+func (s *Store) CreateChannel(ctx context.Context, input ChannelInput, publicStreamURL string, ownerID string) (Channel, error) {
 	input = normalizeInput(input)
 	playlistURL := fmt.Sprintf("%s/proxy/%s/index.m3u8", strings.TrimRight(publicStreamURL, "/"), input.Slug)
+	var ownerArg any
+	if ownerID != "" {
+		ownerArg = ownerID
+	}
 	row := s.pool.QueryRow(ctx, `
-insert into channels (name, slug, input_url, mode, status, playlist_url, playlist_ttl_seconds, segment_ttl_seconds, ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+insert into channels (name, slug, input_url, mode, status, playlist_url, playlist_ttl_seconds, segment_ttl_seconds, ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds, http_referer, http_user_agent, http_origin, playback_token_required, owner_id, node_id)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 returning `+channelColumns,
-		input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds)
+		input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds, input.HTTPReferer, input.HTTPUserAgent, input.HTTPOrigin, *input.PlaybackTokenRequired, ownerArg, input.NodeID)
 	return scanChannel(row)
 }
 
@@ -169,10 +288,15 @@ update channels set
   cache_enabled = $11,
   sync_enabled = $12,
   sync_delay_seconds = $13,
+  http_referer = $14,
+  http_user_agent = $15,
+  http_origin = $16,
+  node_id = $17,
+  playback_token_required = $18,
   updated_at = now()
 where id = $1
 returning `+channelColumns,
-		id, input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds)
+		id, input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds, input.HTTPReferer, input.HTTPUserAgent, input.HTTPOrigin, input.NodeID, *input.PlaybackTokenRequired)
 	return scanChannel(row)
 }
 
@@ -247,7 +371,7 @@ where channel_id = $1 and window_start > now() - interval '1 hour'`, channelID)
 }
 
 const channelColumns = `id, name, slug, input_url, mode, status, worker_status, playback_token, playlist_url, playlist_ttl_seconds, segment_ttl_seconds,
-	ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds, last_request_at, last_source_fetch_at, last_source_status, last_error, worker_started_at, created_at, updated_at`
+	ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds, http_referer, http_user_agent, http_origin, playback_token_required, owner_id, node_id, last_request_at, last_source_fetch_at, last_source_status, last_error, worker_started_at, created_at, updated_at`
 
 const baseChannelSelect = `select ` + channelColumns + ` from channels`
 
@@ -269,6 +393,12 @@ func scanChannel(row pgx.Row) (Channel, error) {
 		&channel.CacheEnabled,
 		&channel.SyncEnabled,
 		&channel.SyncDelaySeconds,
+		&channel.HTTPReferer,
+		&channel.HTTPUserAgent,
+		&channel.HTTPOrigin,
+		&channel.PlaybackTokenRequired,
+		&channel.OwnerID,
+		&channel.NodeID,
 		&channel.LastRequestAt,
 		&channel.LastSourceFetchAt,
 		&channel.LastSourceStatus,
@@ -284,6 +414,9 @@ func normalizeInput(input ChannelInput) ChannelInput {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Slug = strings.Trim(strings.ToLower(input.Slug), " ")
 	input.InputURL = strings.TrimSpace(input.InputURL)
+	input.HTTPReferer = strings.TrimSpace(input.HTTPReferer)
+	input.HTTPUserAgent = strings.TrimSpace(input.HTTPUserAgent)
+	input.HTTPOrigin = strings.TrimSpace(input.HTTPOrigin)
 	if input.Mode == "" {
 		input.Mode = "ingest"
 	}
@@ -306,6 +439,10 @@ func normalizeInput(input ChannelInput) ChannelInput {
 	if input.SyncEnabled == nil {
 		syncEnabled := false
 		input.SyncEnabled = &syncEnabled
+	}
+	if input.PlaybackTokenRequired == nil {
+		required := true
+		input.PlaybackTokenRequired = &required
 	}
 	if input.SyncDelaySeconds <= 0 {
 		input.SyncDelaySeconds = 30

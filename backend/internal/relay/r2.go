@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type R2Client struct {
@@ -64,13 +65,17 @@ func (r *R2Client) DeleteFolder(ctx context.Context, slug string) error {
 		if err != nil {
 			return err
 		}
+		if len(page.Contents) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(page.Contents))
 		for _, obj := range page.Contents {
-			if _, err := r.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-				Bucket: aws.String(r.bucket),
-				Key:    obj.Key,
-			}); err != nil {
-				return err
+			if obj.Key != nil {
+				keys = append(keys, *obj.Key)
 			}
+		}
+		if err := r.DeleteKeys(ctx, keys); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -112,15 +117,39 @@ func (r *R2Client) ListOlderThan(ctx context.Context, slug string, age time.Dura
 	return keys, nil
 }
 
-// DeleteKeys removes a batch of full keys (already in slug/name form).
+// DeleteKeys removes a batch of full keys (already in slug/name form) using
+// the S3 DeleteObjects (plural) API — up to 1000 keys per request counts as
+// a single Class A operation, vs one op per key with DeleteObject.
 func (r *R2Client) DeleteKeys(ctx context.Context, keys []string) error {
-	for _, key := range keys {
-		k := key
-		if _, err := r.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	const batchSize = 1000
+	for i := 0; i < len(keys); i += batchSize {
+		end := i + batchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		objs := make([]types.ObjectIdentifier, 0, end-i)
+		for _, k := range keys[i:end] {
+			key := k
+			objs = append(objs, types.ObjectIdentifier{Key: aws.String(key)})
+		}
+		out, err := r.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(r.bucket),
-			Key:    aws.String(k),
-		}); err != nil {
+			Delete: &types.Delete{Objects: objs, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
 			return err
+		}
+		if out != nil && len(out.Errors) > 0 {
+			first := out.Errors[0]
+			code := ""
+			msg := ""
+			if first.Code != nil {
+				code = *first.Code
+			}
+			if first.Message != nil {
+				msg = *first.Message
+			}
+			return fmt.Errorf("r2 DeleteObjects partial failure (%d errors): %s: %s", len(out.Errors), code, msg)
 		}
 	}
 	return nil

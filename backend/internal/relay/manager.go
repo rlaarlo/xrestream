@@ -246,7 +246,7 @@ func (m *Manager) ServePlaylist(ctx context.Context, slug string) (string, strin
 		return cached.body, channel.ID, nil
 	}
 
-	body, statusCode, err := m.fetchText(ctx, channel.InputURL)
+	body, statusCode, err := m.fetchTextWithHeaders(ctx, channel.InputURL, channel.HTTPReferer, channel.HTTPUserAgent, channel.HTTPOrigin)
 	if err != nil {
 		message := err.Error()
 		_ = m.store.SetSourceStatus(ctx, channel.ID, statusCode, &message)
@@ -398,7 +398,7 @@ func (m *Manager) workerLoop(ctx context.Context, channel store.Channel, handle 
 }
 
 func (m *Manager) runIngestCycle(ctx context.Context, channel store.Channel) error {
-	body, statusCode, err := m.fetchText(ctx, channel.InputURL)
+	body, statusCode, err := m.fetchTextWithHeaders(ctx, channel.InputURL, channel.HTTPReferer, channel.HTTPUserAgent, channel.HTTPOrigin)
 	if err != nil {
 		return err
 	}
@@ -428,11 +428,15 @@ func (m *Manager) runIngestCycle(ctx context.Context, channel store.Channel) err
 }
 
 func (m *Manager) fetchText(ctx context.Context, rawURL string) (string, int, error) {
+	return m.fetchTextWithHeaders(ctx, rawURL, "", "", "")
+}
+
+func (m *Manager) fetchTextWithHeaders(ctx context.Context, rawURL, referer, userAgent, origin string) (string, int, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, err
 	}
-	request.Header.Set("User-Agent", "restream-hls-relay/0.1")
+	applyUpstreamHeaders(request, referer, userAgent, origin)
 	response, err := m.client.Do(request)
 	if err != nil {
 		return "", 0, err
@@ -449,12 +453,26 @@ func (m *Manager) fetchText(ctx context.Context, rawURL string) (string, int, er
 	return string(bytes), response.StatusCode, nil
 }
 
+func applyUpstreamHeaders(request *http.Request, referer, userAgent, origin string) {
+	if userAgent = strings.TrimSpace(userAgent); userAgent != "" {
+		request.Header.Set("User-Agent", userAgent)
+	} else {
+		request.Header.Set("User-Agent", "restream-hls-relay/0.1")
+	}
+	if referer = strings.TrimSpace(referer); referer != "" {
+		request.Header.Set("Referer", referer)
+	}
+	if origin = strings.TrimSpace(origin); origin != "" {
+		request.Header.Set("Origin", origin)
+	}
+}
+
 func (m *Manager) fetchAndCache(ctx context.Context, channel store.Channel, ref, sourceURL string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("User-Agent", "restream-hls-relay/0.1")
+	applyUpstreamHeaders(request, channel.HTTPReferer, channel.HTTPUserAgent, channel.HTTPOrigin)
 	response, err := m.client.Do(request)
 	if err != nil {
 		return err
@@ -858,8 +876,7 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handl
 		_ = clearTransmuxFiles(dir)
 
 		startNumber := time.Now().Unix()
-		cmd := exec.CommandContext(ctx,
-			"ffmpeg",
+		ffmpegArgs := []string{
 			"-hide_banner",
 			"-loglevel", "info",
 			// genpts: regenerate missing PTS; igndts: ignore broken DTS coming from source.
@@ -874,7 +891,19 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handl
 			"-reconnect_on_network_error", "1",
 			"-reconnect_on_http_error", "4xx,5xx",
 			"-reconnect_delay_max", "30",
-			"-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+		}
+		userAgent := strings.TrimSpace(channel.HTTPUserAgent)
+		if userAgent == "" {
+			userAgent = "VLC/3.0.20 LibVLC/3.0.20"
+		}
+		ffmpegArgs = append(ffmpegArgs, "-user_agent", userAgent)
+		if referer := strings.TrimSpace(channel.HTTPReferer); referer != "" {
+			ffmpegArgs = append(ffmpegArgs, "-referer", referer)
+		}
+		if origin := strings.TrimSpace(channel.HTTPOrigin); origin != "" {
+			ffmpegArgs = append(ffmpegArgs, "-headers", "Origin: "+origin+"\r\n")
+		}
+		ffmpegArgs = append(ffmpegArgs,
 			"-i", channel.InputURL,
 			"-map", "0",
 			"-c", "copy",
@@ -886,8 +915,8 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handl
 			"-max_muxing_queue_size", "2048",
 			"-mpegts_flags", "+resend_headers+initial_discontinuity",
 			"-f", "hls",
-			"-hls_time", "2",
-			"-hls_list_size", "30",
+			"-hls_time", "4",
+			"-hls_list_size", "15",
 			// discont_start: mark new ffmpeg sessions as discontinuity so players resync cleanly.
 			// independent_segments: each segment starts on a keyframe boundary -> no broken P-frames at seam.
 			"-hls_flags", "delete_segments+append_list+omit_endlist+discont_start+independent_segments",
@@ -897,6 +926,7 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handl
 			"-hls_segment_filename", filepath.Join(dir, "seg-%d.ts"),
 			playlistPath,
 		)
+		cmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
 		cmd.Stdout = io.Discard
 		stderr, _ := cmd.StderrPipe()
 

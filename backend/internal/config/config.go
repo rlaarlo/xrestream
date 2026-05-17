@@ -27,6 +27,17 @@ type Config struct {
 	R2RetentionSecs   int
 	LocalRetentionSecs int
 	SourceErrorAfterSecs int
+	AdminUIOrigins    []string
+	PlaybackTokenTTLSecs int
+	AllowSignup       bool
+
+	// Node-mode
+	Mode            string // "control" (default) or "node"
+	ControlPlaneURL string
+	NodeAPIKey      string
+	NodeHeartbeatSecs int
+	NodeConfigPollSecs int
+	AgentBinaryDir  string
 }
 
 func Load() Config {
@@ -52,7 +63,17 @@ func Load() Config {
 		R2RetentionSecs:   getEnvInt("R2_RETENTION_SECONDS", 600),
 		LocalRetentionSecs: getEnvInt("LOCAL_RETENTION_SECONDS", 60),
 		SourceErrorAfterSecs: getEnvInt("SOURCE_ERROR_AFTER_SECONDS", 300),
+		AdminUIOrigins:    splitCSV(firstNonEmpty(os.Getenv("ADMIN_UI_ORIGINS"), os.Getenv("ALLOWED_ORIGINS"))),
+		PlaybackTokenTTLSecs: getEnvInt("PLAYBACK_TOKEN_TTL_SECONDS", 900),
+		AllowSignup:       getEnvBool("ALLOW_SIGNUP", true),
+		Mode:              strings.ToLower(getEnv("MODE", "control")),
+		ControlPlaneURL:   strings.TrimRight(getEnv("CONTROL_PLANE_URL", ""), "/"),
+		NodeAPIKey:        os.Getenv("NODE_API_KEY"),
+		NodeHeartbeatSecs: getEnvInt("NODE_HEARTBEAT_SECONDS", 30),
+		NodeConfigPollSecs: getEnvInt("NODE_CONFIG_POLL_SECONDS", 15),
+		AgentBinaryDir:    getEnv("AGENT_BINARY_DIR", ""),
 	}
+	cfg.AgentBinaryDir = resolveAgentBinaryDir(cfg.AgentBinaryDir)
 	if cfg.AdminPassword == "" {
 		cfg.AdminPassword = cfg.AdminToken
 	}
@@ -65,6 +86,36 @@ func Load() Config {
 	}
 
 	return cfg
+}
+
+// resolveAgentBinaryDir returns an absolute path to the directory that
+// holds the agent binaries served by /agent/<name>. Resolution order:
+//   1. AGENT_BINARY_DIR if absolute — use as-is.
+//   2. AGENT_BINARY_DIR if relative — resolve against the executable's
+//      directory (NOT cwd) so behaviour is deterministic regardless of
+//      how the process is started (systemd, supervisor, manual cd).
+//   3. If unset, default to "<executable-dir>/bin".
+func resolveAgentBinaryDir(raw string) string {
+	execDir := ""
+	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		execDir = filepath.Dir(exe)
+	}
+	if raw == "" {
+		if execDir != "" {
+			return filepath.Join(execDir, "bin")
+		}
+		return "bin"
+	}
+	if filepath.IsAbs(raw) {
+		return raw
+	}
+	if execDir != "" {
+		return filepath.Join(execDir, raw)
+	}
+	return raw
 }
 
 func loadDotEnv(path string) {
@@ -128,4 +179,42 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return fallback
+}
+
+func splitCSV(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimRight(strings.TrimSpace(p), "/")
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }

@@ -12,6 +12,7 @@ import (
 
 	"restream/backend/internal/config"
 	"restream/backend/internal/httpapi"
+	"restream/backend/internal/nodeagent"
 	"restream/backend/internal/relay"
 	"restream/backend/internal/store"
 )
@@ -22,6 +23,15 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.Mode == "node" {
+		agent := nodeagent.New(cfg, logger)
+		if err := agent.Run(ctx); err != nil {
+			logger.Error("node agent failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	database, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -47,6 +57,10 @@ func main() {
 	}
 
 	handler := httpapi.NewServer(cfg, database, relayManager, logger)
+	if err := handler.EnsureSeedData(); err != nil {
+		logger.Error("seed data failed", "error", err)
+		os.Exit(1)
+	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
