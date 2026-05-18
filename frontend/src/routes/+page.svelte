@@ -45,7 +45,7 @@
   let loggingIn = false;
   let error = '';
   let notice = '';
-  let username = 'admin';
+  let username = '';
   let password = '';
   let authenticated = false;
   let showAdvanced = false;
@@ -580,7 +580,7 @@
           <form class="mt-4 grid gap-3" on:submit|preventDefault={login}>
             <label class="form-control">
               <span class="label-text">Username</span>
-              <input class="input input-bordered" bind:value={username} autocomplete="username" required />
+              <input class="input input-bordered" bind:value={username} placeholder="username" autocomplete="username" required />
             </label>
             <label class="form-control">
               <span class="label-text">Password</span>
