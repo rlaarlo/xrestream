@@ -121,7 +121,7 @@ export const setUserPassword = (id: string, password: string) =>
 export const deleteUser = (id: string) =>
   apiFetch<{ deleted: boolean }>(`/admin/users/${id}`, { method: 'DELETE' });
 
-export type AuthMe = { username: string; role: string; expiresAt: string };
+export type AuthMe = { userId: string; username: string; role: string; expiresAt: string };
 export const fetchMe = () => apiFetch<AuthMe>('/auth/me');
 export const logout = () => apiFetch<{ ok: boolean }>('/auth/logout', { method: 'POST' });
 

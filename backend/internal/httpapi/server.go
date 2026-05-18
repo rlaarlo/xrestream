@@ -469,6 +469,7 @@ func (s *Server) authMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"userId":    sess.UserID,
 		"username":  sess.Username,
 		"role":      sess.Role,
 		"expiresAt": sess.ExpiresAt.UTC().Format(time.RFC3339),

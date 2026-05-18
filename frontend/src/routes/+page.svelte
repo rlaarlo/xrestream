@@ -13,8 +13,10 @@
     createShareLink,
     mintPlaybackToken,
     listNodes,
+    listUsers,
     fetchMe,
     type Channel,
+    type User,
     type ChannelInput,
     type Metrics,
     type ShareLink,
@@ -39,6 +41,7 @@
   let channels: Channel[] = [];
   let metrics: Record<string, Metrics> = {};
   let nodes: Node[] = [];
+  let users: User[] = [];
   let me: AuthMe | null = null;
   let loading = true;
   let saving = false;
@@ -150,6 +153,11 @@
     error = '';
       try { nodes = await listNodes(); } catch { nodes = []; }
       try { me = await fetchMe(); } catch { me = null; }
+      if (me?.role === 'admin') {
+        try { users = await listUsers(); } catch { users = []; }
+      } else {
+        users = [];
+      }
     try {
       channels = await apiFetch<Channel[]>('/channels');
       await Promise.all(channels.map(loadMetrics));
@@ -500,19 +508,29 @@
   let channelSearch = '';
   let modeFilter: 'all' | Mode = 'all';
   let workerFilter: 'all' | Channel['workerStatus'] = 'all';
+  let ownerFilter: 'all' | 'mine' | 'others' = 'mine';
   let channelPage = 1;
   let channelPageSize = 10;
+  $: isAdmin = me?.role === 'admin';
+  $: ownerMap = new Map(users.map((u) => [u.id, u.username] as const));
+  $: hasOthers = isAdmin && channels.some((c) => c.ownerId && c.ownerId !== me?.userId);
+  $: mineCount = channels.filter((c) => !!me && c.ownerId === me.userId).length;
+  $: othersCount = channels.filter((c) => !!me && c.ownerId && c.ownerId !== me.userId).length;
   $: visibleChannels = channels.filter((c) => {
     const q = channelSearch.trim().toLowerCase();
     if (q && !(c.name.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q) || c.inputUrl.toLowerCase().includes(q))) return false;
     if (modeFilter !== 'all' && c.mode !== modeFilter) return false;
     if (workerFilter !== 'all' && c.workerStatus !== workerFilter) return false;
+    if (hasOthers && me) {
+      if (ownerFilter === 'mine' && c.ownerId !== me.userId) return false;
+      if (ownerFilter === 'others' && (!c.ownerId || c.ownerId === me.userId)) return false;
+    }
     return true;
   });
   $: channelTotalPages = Math.max(1, Math.ceil(visibleChannels.length / channelPageSize));
   $: if (channelPage > channelTotalPages) channelPage = channelTotalPages;
   $: {
-    channelSearch; modeFilter; workerFilter; channelPageSize;
+    channelSearch; modeFilter; workerFilter; ownerFilter; channelPageSize;
     channelPage = 1;
   }
   $: pagedChannels = visibleChannels.slice((channelPage - 1) * channelPageSize, channelPage * channelPageSize);
@@ -722,6 +740,18 @@
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-1.5">
+          {#if hasOthers}
+            <select
+              class="select select-bordered select-sm"
+              bind:value={ownerFilter}
+              title="Filter by owner"
+              aria-label="Filter channels by owner"
+            >
+              <option value="mine">Mine ({mineCount})</option>
+              <option value="all">All ({channels.length})</option>
+              <option value="others">Users ({othersCount})</option>
+            </select>
+          {/if}
           <label class="input input-bordered input-sm flex items-center gap-2 w-full sm:w-64">
             <Icon icon="lucide:search" class="text-sm opacity-60" />
             <input type="search" class="grow text-sm" placeholder="Search name, slug, URL" bind:value={channelSearch} />
@@ -808,6 +838,15 @@
                       <div class="min-w-0 max-w-[18rem]">
                         <div class="truncate text-sm font-semibold" title={channel.name}>{channel.name}</div>
                         <div class="truncate text-xs text-base-content/50" title={channel.slug}>/{channel.slug}</div>
+                        {#if isAdmin && channel.ownerId}
+                          <div class="mt-1 flex items-center gap-1 text-[11px] text-base-content/60" title={channel.ownerId}>
+                            <Icon icon="lucide:user" class="shrink-0 text-xs" />
+                            <span class="truncate">{ownerMap.get(channel.ownerId) || channel.ownerId.slice(0, 8)}</span>
+                            {#if channel.ownerId === me?.userId}
+                              <span class="badge badge-ghost badge-xs">you</span>
+                            {/if}
+                          </div>
+                        {/if}
                         {#if channel.lastError}
                           <div class="mt-1 flex items-center gap-1 text-xs font-medium text-error" title={channel.lastError}>
                             <Icon icon="line-md:bell-alert-twotone" class="shrink-0 text-sm" />
@@ -970,6 +1009,15 @@
                   <div class="min-w-0 flex-1">
                     <div class="truncate text-sm font-semibold" title={channel.name}>{channel.name}</div>
                     <div class="truncate text-xs text-base-content/50">/{channel.slug}</div>
+                    {#if isAdmin && channel.ownerId}
+                      <div class="mt-1 flex items-center gap-1 text-[11px] text-base-content/60" title={channel.ownerId}>
+                        <Icon icon="lucide:user" class="shrink-0 text-xs" />
+                        <span class="truncate">{ownerMap.get(channel.ownerId) || channel.ownerId.slice(0, 8)}</span>
+                        {#if channel.ownerId === me?.userId}
+                          <span class="badge badge-ghost badge-xs">you</span>
+                        {/if}
+                      </div>
+                    {/if}
                   </div>
                   <div class="flex items-center gap-1">
                     <button
