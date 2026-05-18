@@ -75,6 +75,27 @@ func main() {
 		}
 	}()
 
+	// Periodically mark nodes whose heartbeat is older than 3x the expected
+	// interval as offline so the dashboard reflects reality after a node
+	// crash/network partition.
+	go func() {
+		interval := time.Duration(cfg.NodeHeartbeatSecs) * time.Second
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		cutoff := interval * 3
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				database.MarkStaleNodesOffline(ctx, cutoff)
+			}
+		}
+	}()
+
 	<-ctx.Done()
 	logger.Info("shutdown requested")
 

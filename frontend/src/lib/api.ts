@@ -138,6 +138,7 @@ export type Node = {
 
 export const listNodes = (all = false) =>
   apiFetch<Node[]>(`/me/nodes${all ? '?all=1' : ''}`);
+export const listAllNodes = () => apiFetch<Node[]>('/admin/nodes');
 export const createNode = (name: string, host = '') =>
   apiFetch<{ node: Node; apiKey: string }>('/me/nodes', {
     method: 'POST',

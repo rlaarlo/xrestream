@@ -25,7 +25,7 @@ import (
 )
 
 type Manager struct {
-	store  *store.Store
+	store  ChannelStore
 	cfg    config.Config
 	logger *slog.Logger
 	client *http.Client
@@ -53,7 +53,7 @@ type workerHandle struct {
 	cancel context.CancelFunc
 }
 
-func NewManager(store *store.Store, cfg config.Config, logger *slog.Logger, r2 *R2Client) *Manager {
+func NewManager(store ChannelStore, cfg config.Config, logger *slog.Logger, r2 *R2Client) *Manager {
 	return &Manager{
 		store:     store,
 		cfg:       cfg,
@@ -67,6 +67,18 @@ func NewManager(store *store.Store, cfg config.Config, logger *slog.Logger, r2 *
 		workers:   map[string]*workerHandle{},
 		viewers:   map[string]map[string]time.Time{},
 	}
+}
+
+// SetR2Client swaps the R2 client used for segment uploads at runtime. Pass
+// nil to disable R2 sync. Used by the node-agent when the control plane
+// pushes updated R2 credentials.
+func (m *Manager) SetR2Client(r2 *R2Client) {
+	m.mu.Lock()
+	m.r2 = r2
+	// Clear the per-asset readiness map so new uploads are attempted with
+	// the new client/bucket.
+	m.r2Ready = sync.Map{}
+	m.mu.Unlock()
 }
 
 func (m *Manager) RegisterAsset(slug, sourceURL string) (string, string) {

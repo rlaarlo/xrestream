@@ -365,6 +365,10 @@ func (s *Server) handleNodeConfig(w http.ResponseWriter, r *http.Request) {
 			"name": n.Name,
 			"host": n.Host,
 		},
+		// Node needs the signing secret so it can verify signed asset URLs
+		// and accept share/playback tokens minted by the control plane.
+		"signingSecret":   s.cfg.SigningSecret,
+		"publicStreamURL": s.cfg.PublicStreamURL,
 	}
 	if cfg, err := s.store.GetR2Config(r.Context(), n.OwnerID); err == nil {
 		resp["r2"] = cfg
@@ -374,4 +378,55 @@ func (s *Server) handleNodeConfig(w http.ResponseWriter, r *http.Request) {
 		resp["channels"] = channels
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleNodeReport accepts batched status + metric updates pushed from a
+// node-agent so the control-plane dashboard reflects what the node is
+// actually doing.
+func (s *Server) handleNodeReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	n, ok := s.authenticateNode(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid node key")
+		return
+	}
+	var body struct {
+		Statuses []struct {
+			ChannelID    string  `json:"channelId"`
+			WorkerStatus string  `json:"workerStatus"`
+			LastError    *string `json:"lastError,omitempty"`
+			SourceStatus *int    `json:"sourceStatus,omitempty"`
+		} `json:"statuses"`
+		Metrics []struct {
+			ChannelID string `json:"channelId"`
+			Field     string `json:"field"`
+			Amount    int64  `json:"amount"`
+		} `json:"metrics"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		badRequest(w, err)
+		return
+	}
+	ctx := r.Context()
+	for _, st := range body.Statuses {
+		if st.ChannelID == "" {
+			continue
+		}
+		if st.WorkerStatus != "" {
+			_ = s.store.SetWorkerStatus(ctx, st.ChannelID, st.WorkerStatus, st.LastError)
+		}
+		if st.SourceStatus != nil {
+			_ = s.store.SetSourceStatus(ctx, st.ChannelID, *st.SourceStatus, st.LastError)
+		}
+	}
+	for _, m := range body.Metrics {
+		if m.ChannelID == "" || m.Field == "" || m.Amount == 0 {
+			continue
+		}
+		s.store.IncrementMetric(ctx, m.ChannelID, m.Field, m.Amount)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodeId": n.ID})
 }

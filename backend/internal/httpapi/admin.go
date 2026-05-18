@@ -257,6 +257,24 @@ func (s *Server) handleUserPassword(w http.ResponseWriter, r *http.Request, id s
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// handleAdminNodes lists every node across all owners. Convenience wrapper
+// over `/me/nodes?all=1` so admin tooling can use a stable, role-scoped path.
+func (s *Server) handleAdminNodes(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	list, err := s.store.ListNodes(r.Context(), "")
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 // EnsureSeedData seeds the first admin user and the initial allowed-origin
 // list from environment variables if both tables are empty. Safe to call on
 // every boot.

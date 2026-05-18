@@ -5,7 +5,7 @@
   import {
     listOrigins, createOrigin, updateOrigin, deleteOrigin,
     listUsers, createUser, updateUser, deleteUser, setUserPassword,
-    listNodes, createNode, updateNode, deleteNode,
+    listNodes, createNode, updateNode, deleteNode, listAllNodes,
     getR2Config, saveR2Config, deleteR2Config,
     fetchMe, getStoredToken, setStoredToken, getApiBase, logout as apiLogout,
     type AllowedOrigin, type User, type AuthMe, type Node, type R2Config
@@ -13,7 +13,7 @@
   import { goto } from '$app/navigation';
 
   let me: AuthMe | null = null;
-  let tab: 'servers' | 'r2' | 'origins' | 'users' = 'servers';
+  let tab: 'servers' | 'all-servers' | 'r2' | 'origins' | 'users' = 'servers';
 
   let origins: AllowedOrigin[] = [];
   let users: User[] = [];
@@ -63,6 +63,22 @@
   let createdKey: { node: Node; apiKey: string } | null = null;
   let installArch: 'auto' | 'amd64' | 'arm64' = 'auto';
 
+  // Admin: all nodes across owners
+  let allNodes: Node[] = [];
+  let allNodesSearch = '';
+  $: ownerMap = new Map(users.map((u) => [u.id, u.username] as const));
+  $: filteredAllNodes = allNodes.filter((n) => {
+    const q = allNodesSearch.trim().toLowerCase();
+    if (!q) return true;
+    const owner = (ownerMap.get(n.ownerId) || '').toLowerCase();
+    return (
+      n.name.toLowerCase().includes(q) ||
+      (n.host || '').toLowerCase().includes(q) ||
+      owner.includes(q) ||
+      n.ownerId.toLowerCase().includes(q)
+    );
+  });
+
   // R2
   let r2: R2Config | null = null;
   let r2Form = { accountId: '', accessKeyId: '', secretAccessKey: '', bucket: '', publicUrl: '' };
@@ -100,6 +116,7 @@
       ];
       if (isAdmin) {
         tasks.push(listUsers().then((v) => (users = v)));
+        tasks.push(listAllNodes().then((v) => (allNodes = v)).catch(() => (allNodes = [])));
       }
       await Promise.all(tasks);
     } catch (e) {
@@ -361,6 +378,9 @@
         <Icon icon="lucide:shield-check" class="text-base" /> Allowed Origins
       </button>
       {#if me?.role === 'admin'}
+        <button role="tab" class="tab gap-1.5" class:tab-active={tab === 'all-servers'} on:click={() => (tab = 'all-servers')}>
+          <Icon icon="lucide:network" class="text-base" /> All Servers
+        </button>
         <button role="tab" class="tab gap-1.5" class:tab-active={tab === 'users'} on:click={() => (tab = 'users')}>
           <Icon icon="lucide:users" class="text-base" /> Users
         </button>
@@ -414,6 +434,61 @@
                 </tr>
               {:else}
                 <tr><td colspan="5" class="text-center opacity-60 py-6">No servers yet.</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {:else if tab === 'all-servers'}
+      <div class="card bg-base-100 shadow">
+        <div class="card-body">
+          <div class="flex flex-col md:flex-row md:items-center gap-2">
+            <div>
+              <h2 class="card-title text-base">All Servers (admin)</h2>
+              <p class="text-sm opacity-70">Read-only view dari semua node lintas user. CRUD tetap di "My Servers" milik owner masing-masing.</p>
+            </div>
+            <div class="md:ml-auto flex gap-2">
+              <input class="input input-bordered input-sm w-56" placeholder="Search name / host / owner" bind:value={allNodesSearch} />
+              <button class="btn btn-ghost btn-sm" on:click={refresh} title="Refresh">
+                <Icon icon="lucide:refresh-cw" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card bg-base-100 shadow mt-4">
+        <div class="card-body p-0">
+          <table class="table">
+            <thead>
+              <tr><th>Owner</th><th>Name</th><th>Host</th><th>Status</th><th>Last seen</th><th>Created</th></tr>
+            </thead>
+            <tbody>
+              {#each filteredAllNodes as n (n.id)}
+                <tr>
+                  <td class="text-sm">
+                    {#if ownerMap.get(n.ownerId)}
+                      <span class="font-medium">{ownerMap.get(n.ownerId)}</span>
+                    {:else}
+                      <span class="font-mono text-xs opacity-60">{n.ownerId}</span>
+                    {/if}
+                  </td>
+                  <td class="font-medium">{n.name}</td>
+                  <td class="font-mono text-xs opacity-70">{n.host || '—'}</td>
+                  <td>
+                    {#if n.status === 'online'}
+                      <span class="badge badge-success badge-sm gap-1"><span class="w-1.5 h-1.5 rounded-full bg-white" /> online</span>
+                    {:else if n.status === 'offline'}
+                      <span class="badge badge-error badge-sm">offline</span>
+                    {:else}
+                      <span class="badge badge-warning badge-sm">pending</span>
+                    {/if}
+                  </td>
+                  <td class="text-xs opacity-60">{n.lastSeenAt ? new Date(n.lastSeenAt).toLocaleString() : 'never'}</td>
+                  <td class="text-xs opacity-60">{new Date(n.createdAt).toLocaleString()}</td>
+                </tr>
+              {:else}
+                <tr><td colspan="6" class="text-center opacity-60 py-6">No servers registered.</td></tr>
               {/each}
             </tbody>
           </table>

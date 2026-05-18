@@ -228,8 +228,12 @@ func (s *Store) ListChannelsForNode(ctx context.Context, nodeID string) ([]Chann
 	return channels, rows.Err()
 }
 
+// ActiveWorkerChannels returns channels that the *control plane* should run
+// workers for: active ingest/transmux channels that are NOT pinned to a
+// remote node. Node-bound channels are reconciled by the node-agent on the
+// target VPS instead.
 func (s *Store) ActiveWorkerChannels(ctx context.Context) ([]Channel, error) {
-	rows, err := s.pool.Query(ctx, baseChannelSelect+` where mode in ('ingest', 'transmux') and status = 'active' order by created_at asc`)
+	rows, err := s.pool.Query(ctx, baseChannelSelect+` where mode in ('ingest', 'transmux') and status = 'active' and node_id is null order by created_at asc`)
 	if err != nil {
 		return nil, err
 	}

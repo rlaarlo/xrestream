@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,8 +34,9 @@ type Server struct {
 	rootCtx context.Context
 	handler http.Handler
 
-	auth    *authCache
-	origins *originCache
+	auth          *authCache
+	origins       *originCache
+	nodeHostCache sync.Map
 }
 
 func NewServer(cfg config.Config, store *store.Store, relayManager *relay.Manager, logger *slog.Logger) *Server {
@@ -75,6 +77,7 @@ func (s *Server) routes() {
 	s.router.HandleFunc("/admin/origins/", s.handleOriginByID)
 	s.router.HandleFunc("/admin/users", s.handleUsers)
 	s.router.HandleFunc("/admin/users/", s.handleUserByID)
+	s.router.HandleFunc("/admin/nodes", s.handleAdminNodes)
 	s.router.HandleFunc("/me/nodes", s.handleMyNodes)
 	s.router.HandleFunc("/me/nodes/", s.handleMyNodeByID)
 	s.router.HandleFunc("/me/r2", s.handleMyR2)
@@ -82,6 +85,7 @@ func (s *Server) routes() {
 	s.router.HandleFunc("/me/origins/", s.handleMyOriginByID)
 	s.router.HandleFunc("/node/heartbeat", s.handleNodeHeartbeat)
 	s.router.HandleFunc("/node/config", s.handleNodeConfig)
+	s.router.HandleFunc("/node/report", s.handleNodeReport)
 	s.router.HandleFunc("/agent/", s.handleAgentDownload)
 }
 
@@ -342,9 +346,11 @@ func (s *Server) channels(w http.ResponseWriter, r *http.Request) {
 			serverError(w, err)
 			return
 		}
-		if channel.Mode == "ingest" || channel.Mode == "transmux" {
-			if channel.Status == "active" {
-				s.relay.StartWorker(s.rootCtx, channel)
+		if channel.NodeID == nil || *channel.NodeID == "" {
+			if channel.Mode == "ingest" || channel.Mode == "transmux" {
+				if channel.Status == "active" {
+					s.relay.StartWorker(s.rootCtx, channel)
+				}
 			}
 		}
 		s.applyPublicPlaylistURL(&channel)
@@ -354,20 +360,49 @@ func (s *Server) channels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// applyPublicPlaylistURL always rewrites the channel's playlistUrl using the
-// currently configured PublicStreamURL. This ensures that records persisted
-// with an older base URL (e.g. http://localhost:3000) are still served with
-// the up-to-date public URL without requiring a database migration.
+// applyPublicPlaylistURL rewrites the channel's playlistUrl. When the
+// channel is pinned to a remote node, the URL points to that node's
+// public host so players hit the node directly instead of the control
+// plane. Otherwise it falls back to PublicStreamURL.
 func (s *Server) applyPublicPlaylistURL(channel *store.Channel) {
 	if channel == nil || channel.Slug == "" {
 		return
 	}
 	base := strings.TrimRight(s.cfg.PublicStreamURL, "/")
+	if channel.NodeID != nil && *channel.NodeID != "" {
+		if host := s.nodeHost(*channel.NodeID); host != "" {
+			base = strings.TrimRight(host, "/")
+		}
+	}
 	if base == "" {
 		return
 	}
 	url := fmt.Sprintf("%s/proxy/%s/index.m3u8", base, channel.Slug)
 	channel.PlaylistURL = &url
+}
+
+// nodeHost looks up the public host of a node, with a small in-memory
+// cache so listing channels stays O(1) per node instead of O(N) DB hits.
+func (s *Server) nodeHost(nodeID string) string {
+	if nodeID == "" {
+		return ""
+	}
+	if v, ok := s.nodeHostCache.Load(nodeID); ok {
+		if entry, ok := v.(nodeHostEntry); ok && time.Since(entry.at) < 30*time.Second {
+			return entry.host
+		}
+	}
+	n, err := s.store.GetNode(s.rootCtx, nodeID)
+	if err != nil {
+		return ""
+	}
+	s.nodeHostCache.Store(nodeID, nodeHostEntry{host: n.Host, at: time.Now()})
+	return n.Host
+}
+
+type nodeHostEntry struct {
+	host string
+	at   time.Time
 }
 
 func (s *Server) channelByID(w http.ResponseWriter, r *http.Request) {
@@ -503,8 +538,10 @@ func (s *Server) handleChannelRecord(w http.ResponseWriter, r *http.Request, id 
 			return
 		}
 		s.relay.StopWorker(id)
-		if (channel.Mode == "ingest" || channel.Mode == "transmux") && channel.Status == "active" {
-			s.relay.StartWorker(s.rootCtx, channel)
+		if channel.NodeID == nil || *channel.NodeID == "" {
+			if (channel.Mode == "ingest" || channel.Mode == "transmux") && channel.Status == "active" {
+				s.relay.StartWorker(s.rootCtx, channel)
+			}
 		}
 		s.applyPublicPlaylistURL(&channel)
 		writeJSON(w, http.StatusOK, channel)
