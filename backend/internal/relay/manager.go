@@ -892,17 +892,12 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handl
 			"-hide_banner",
 			"-loglevel", "info",
 			// genpts: regenerate missing PTS; igndts: ignore broken DTS coming from source.
-			// Removed +nobuffer (it amplified jitter into visible glitches) and
-			// +discardcorrupt (it dropped frames on minor TS errors causing freeze).
 			"-fflags", "+genpts+igndts",
 			"-err_detect", "ignore_err",
 			"-rw_timeout", "30000000",
-			"-reconnect", "1",
-			"-reconnect_at_eof", "1",
-			"-reconnect_streamed", "1",
-			"-reconnect_on_network_error", "1",
-			"-reconnect_on_http_error", "4xx,5xx",
-			"-reconnect_delay_max", "30",
+			// Let the Go manager restart ffmpeg on source EOF/network error.
+			// In-process -reconnect_at_eof/-reconnect_on_* trigger a seek-based
+			// HTTP reconnect that can segfault on chunked-encoding edge cases.
 		}
 		userAgent := strings.TrimSpace(channel.HTTPUserAgent)
 		if userAgent == "" {
@@ -919,11 +914,6 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handl
 			"-i", channel.InputURL,
 			"-map", "0",
 			"-c", "copy",
-			// Tag HEVC streams as hvc1 (Apple-style) so Safari/Edge recognize them.
-			"-tag:v", "hvc1",
-			"-copyts",
-			"-muxdelay", "0",
-			"-muxpreload", "0",
 			"-max_muxing_queue_size", "2048",
 			"-mpegts_flags", "+resend_headers+initial_discontinuity",
 			"-f", "hls",

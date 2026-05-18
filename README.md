@@ -123,8 +123,8 @@ Untuk production, isi `ADMIN_USERNAME`, `ADMIN_PASSWORD`, dan `ADMIN_TOKEN` deng
 
 ```bash
 cd frontend
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 Env:

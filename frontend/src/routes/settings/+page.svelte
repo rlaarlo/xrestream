@@ -62,6 +62,7 @@
   let savingNode = false;
   let createdKey: { node: Node; apiKey: string } | null = null;
   let installArch: 'auto' | 'amd64' | 'arm64' = 'auto';
+  let installMode: 'oneclick' | 'manual' = 'oneclick';
 
   // Admin: all nodes across owners
   let allNodes: Node[] = [];
@@ -170,6 +171,11 @@
       `chmod +x restream-api`,
       run
     ].join('\n');
+  }
+  function oneClickInstall(apiKey: string): string {
+    const base = getApiBase();
+    const url = `${base}/agent/install.sh?key=${encodeURIComponent(apiKey)}`;
+    return `curl -fsSL "${url}" | sudo bash`;
   }
   async function copyText(text: string) {
     try {
@@ -679,18 +685,35 @@
           </div>
         </div>
         <div class="form-control mt-3">
-          <label class="label py-1" for="installcmd"><span class="label-text text-xs">Run on your VPS — pilih sesuai arsitektur</span></label>
           <div role="tablist" class="tabs tabs-boxed mb-2 w-fit">
-            <button role="tab" class="tab tab-sm" class:tab-active={installArch === 'auto'} on:click={() => (installArch = 'auto')}>Auto-detect</button>
-            <button role="tab" class="tab tab-sm" class:tab-active={installArch === 'amd64'} on:click={() => (installArch = 'amd64')}>amd64 (x86_64)</button>
-            <button role="tab" class="tab tab-sm" class:tab-active={installArch === 'arm64'} on:click={() => (installArch = 'arm64')}>arm64 (aarch64)</button>
+            <button role="tab" class="tab tab-sm" class:tab-active={installMode === 'oneclick'} on:click={() => (installMode = 'oneclick')}>One-click installer</button>
+            <button role="tab" class="tab tab-sm" class:tab-active={installMode === 'manual'} on:click={() => (installMode = 'manual')}>Manual</button>
           </div>
-          <div class="join">
-            <textarea id="installcmd" class="textarea textarea-bordered join-item w-full font-mono text-xs" rows={installArch === 'auto' ? 4 : 3} readonly value={installCommand(createdKey.apiKey, installArch)}></textarea>
-            <button class="btn btn-square join-item" on:click={() => createdKey && copyText(installCommand(createdKey.apiKey, installArch))}>
-              <Icon icon="lucide:copy" />
-            </button>
-          </div>
+          {#if installMode === 'oneclick'}
+            <label class="label py-1" for="oneclickcmd"><span class="label-text text-xs">Jalankan di VPS Debian/Ubuntu/CentOS/Alpine sebagai root</span></label>
+            <div class="join">
+              <input id="oneclickcmd" class="input input-bordered join-item w-full font-mono text-xs" readonly value={oneClickInstall(createdKey.apiKey)} />
+              <button class="btn btn-square join-item" on:click={() => createdKey && copyText(oneClickInstall(createdKey.apiKey))}>
+                <Icon icon="lucide:copy" />
+              </button>
+            </div>
+            <p class="text-xs opacity-60 mt-2">
+              Skrip akan install <code>ffmpeg</code>, download binary, pasang systemd unit <code>restream-node</code>, buka port 3000, lalu start. Setelah selesai, edit <strong>Host</strong> node di tabel di atas dengan URL publik VPS (mis. <code>http://IP:3000</code>).
+            </p>
+          {:else}
+            <label class="label py-1" for="installcmd"><span class="label-text text-xs">Manual — pilih arsitektur</span></label>
+            <div role="tablist" class="tabs tabs-boxed mb-2 w-fit">
+              <button role="tab" class="tab tab-sm" class:tab-active={installArch === 'auto'} on:click={() => (installArch = 'auto')}>Auto-detect</button>
+              <button role="tab" class="tab tab-sm" class:tab-active={installArch === 'amd64'} on:click={() => (installArch = 'amd64')}>amd64 (x86_64)</button>
+              <button role="tab" class="tab tab-sm" class:tab-active={installArch === 'arm64'} on:click={() => (installArch = 'arm64')}>arm64 (aarch64)</button>
+            </div>
+            <div class="join">
+              <textarea id="installcmd" class="textarea textarea-bordered join-item w-full font-mono text-xs" rows={installArch === 'auto' ? 4 : 3} readonly value={installCommand(createdKey.apiKey, installArch)}></textarea>
+              <button class="btn btn-square join-item" on:click={() => createdKey && copyText(installCommand(createdKey.apiKey, installArch))}>
+                <Icon icon="lucide:copy" />
+              </button>
+            </div>
+          {/if}
         </div>
         <div class="modal-action">
           <button class="btn btn-primary" on:click={() => (createdKey = null)}>Done</button>
