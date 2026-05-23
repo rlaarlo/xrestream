@@ -239,8 +239,9 @@ func (s *Server) handleMyOrigins(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, list)
 	case http.MethodPost:
 		var body struct {
-			Origin string `json:"origin"`
-			Label  string `json:"label"`
+			Origin    string `json:"origin"`
+			Label     string `json:"label"`
+			ChannelID string `json:"channelId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			badRequest(w, err)
@@ -250,7 +251,19 @@ func (s *Server) handleMyOrigins(w http.ResponseWriter, r *http.Request) {
 			badRequest(w, errors.New("origin is required"))
 			return
 		}
-		o, err := s.store.CreateAllowedOrigin(r.Context(), sess.UserID, body.Origin, body.Label)
+		channelID := strings.TrimSpace(body.ChannelID)
+		if channelID != "" {
+			ch, err := s.store.GetChannel(r.Context(), channelID)
+			if err != nil {
+				handleStoreError(w, err)
+				return
+			}
+			if ch.OwnerID == nil || *ch.OwnerID != sess.UserID {
+				writeError(w, http.StatusForbidden, "channel does not belong to you")
+				return
+			}
+		}
+		o, err := s.store.CreateAllowedOriginScoped(r.Context(), sess.UserID, channelID, body.Origin, body.Label)
 		if err != nil {
 			serverError(w, err)
 			return

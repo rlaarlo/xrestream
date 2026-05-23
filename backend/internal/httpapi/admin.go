@@ -45,8 +45,9 @@ func (s *Server) handleOrigins(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, list)
 	case http.MethodPost:
 		var body struct {
-			Origin string `json:"origin"`
-			Label  string `json:"label"`
+			Origin    string `json:"origin"`
+			Label     string `json:"label"`
+			ChannelID string `json:"channelId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			badRequest(w, err)
@@ -57,7 +58,7 @@ func (s *Server) handleOrigins(w http.ResponseWriter, r *http.Request) {
 			badRequest(w, errors.New("origin is required"))
 			return
 		}
-		o, err := s.store.CreateAllowedOrigin(r.Context(), "", body.Origin, body.Label)
+		o, err := s.store.CreateAllowedOriginScoped(r.Context(), "", strings.TrimSpace(body.ChannelID), body.Origin, body.Label)
 		if err != nil {
 			serverError(w, err)
 			return

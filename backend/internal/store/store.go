@@ -171,8 +171,10 @@ create index if not exists channels_node_idx  on channels (node_id);
 		return err
 	}
 	_, _ = s.pool.Exec(ctx, `alter table allowed_origins add column if not exists owner_id uuid references users(id) on delete cascade`)
+	_, _ = s.pool.Exec(ctx, `alter table allowed_origins add column if not exists channel_id uuid references channels(id) on delete cascade`)
 	_, _ = s.pool.Exec(ctx, `alter table allowed_origins drop constraint if exists allowed_origins_origin_key`)
 	_, _ = s.pool.Exec(ctx, `create unique index if not exists allowed_origins_owner_origin_idx on allowed_origins (coalesce(owner_id, '00000000-0000-0000-0000-000000000000'::uuid), origin)`)
+	_, _ = s.pool.Exec(ctx, `create index if not exists allowed_origins_channel_idx on allowed_origins (channel_id) where channel_id is not null`)
 	return nil
 }
 

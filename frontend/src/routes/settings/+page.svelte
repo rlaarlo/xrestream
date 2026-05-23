@@ -8,7 +8,8 @@
     listNodes, createNode, updateNode, deleteNode, listAllNodes,
     getR2Config, saveR2Config, deleteR2Config,
     fetchMe, getStoredToken, setStoredToken, getApiBase, logout as apiLogout,
-    type AllowedOrigin, type User, type AuthMe, type Node, type R2Config
+    apiFetch,
+    type AllowedOrigin, type User, type AuthMe, type Node, type R2Config, type Channel
   } from '$lib/api';
   import { goto } from '$app/navigation';
 
@@ -23,7 +24,10 @@
 
   let newOrigin = '';
   let newOriginLabel = '';
+  let newOriginChannelId = ''; // '' = applies to all owner channels
   let savingOrigin = false;
+  let myChannels: Channel[] = [];
+  $: channelNameById = new Map(myChannels.map((c) => [c.id, c.name] as const));
 
   let newUsername = '';
   let newPassword = '';
@@ -113,7 +117,8 @@
           r2 = v;
           if (v) r2Form = { accountId: v.accountId, accessKeyId: v.accessKeyId, secretAccessKey: '', bucket: v.bucket, publicUrl: v.publicUrl };
         }),
-        listOrigins().then((v) => (origins = v))
+        listOrigins().then((v) => (origins = v)),
+        apiFetch<Channel[]>('/channels').then((v) => (myChannels = v)).catch(() => (myChannels = []))
       ];
       if (isAdmin) {
         tasks.push(listUsers().then((v) => (users = v)));
@@ -222,9 +227,10 @@
     savingOrigin = true;
     error = '';
     try {
-      await createOrigin(newOrigin.trim(), newOriginLabel.trim());
+      await createOrigin(newOrigin.trim(), newOriginLabel.trim(), newOriginChannelId || null);
       newOrigin = '';
       newOriginLabel = '';
+      newOriginChannelId = '';
       notice = 'Origin added.';
       await refresh();
     } catch (e) {
@@ -526,13 +532,36 @@
     {:else if tab === 'origins'}
       <div class="card bg-base-100 shadow">
         <div class="card-body">
-          <h2 class="card-title text-base">Add Origin</h2>
+          <h2 class="card-title text-base">Add Allowed Origin</h2>
           <p class="text-sm opacity-70">
-            Origins yang boleh memutar stream. Kosong = allow all (development only).
+            Daftar domain yang diizinkan memutar &amp; meng-embed channel Anda.
+            Origin di sini dipakai untuk tiga hal sekaligus pada
+            <code class="text-xs">/proxy</code>, <code class="text-xs">/share</code>,
+            dan <code class="text-xs">/embed</code>:
+          </p>
+          <ul class="text-sm opacity-70 list-disc pl-5">
+            <li>CORS allow-list untuk fetch HLS dari browser.</li>
+            <li>Whitelist <strong>Referer</strong> — request tanpa Referer atau dari domain lain akan ditolak <code class="text-xs">403</code>.</li>
+            <li>Header <code class="text-xs">Content-Security-Policy: frame-ancestors</code> pada halaman <code class="text-xs">/embed</code> — iframe di domain lain akan diblokir browser.</li>
+          </ul>
+          <p class="text-xs opacity-60 mt-1">
+            Format: <code>https://website-anda.com</code> (scheme + host, tanpa path).
+            Daftarkan domain <em>website utama</em> yang meng-embed iframe — bukan website referer artikel.
+            Kosong = stream terbuka untuk semua origin (development only).
+          </p>
+          <p class="text-xs opacity-60">
+            <strong>Scope</strong>: pilih <em>All channels</em> agar origin berlaku untuk semua channel Anda,
+            atau pilih channel tertentu agar origin hanya membuka channel itu saja.
           </p>
           <div class="flex flex-col md:flex-row gap-2 mt-2">
             <input class="input input-bordered flex-1" placeholder="https://your-site.com" bind:value={newOrigin} />
             <input class="input input-bordered md:w-48" placeholder="Label (optional)" bind:value={newOriginLabel} />
+            <select class="select select-bordered md:w-56" bind:value={newOriginChannelId}>
+              <option value="">All channels (owner-wide)</option>
+              {#each myChannels as c (c.id)}
+                <option value={c.id}>{c.name}</option>
+              {/each}
+            </select>
             <button class="btn btn-primary" on:click={addOrigin} disabled={savingOrigin}>Add</button>
           </div>
         </div>
@@ -542,13 +571,20 @@
         <div class="card-body p-0">
           <table class="table">
             <thead>
-              <tr><th>Origin</th><th>Label</th><th>Enabled</th><th>Created</th><th></th></tr>
+              <tr><th>Origin</th><th>Label</th><th>Scope</th><th>Enabled</th><th>Created</th><th></th></tr>
             </thead>
             <tbody>
               {#each origins as o (o.id)}
                 <tr>
                   <td class="font-mono text-sm">{o.origin}</td>
                   <td class="text-sm opacity-70">{o.label || '—'}</td>
+                  <td class="text-sm">
+                    {#if o.channelId}
+                      <span class="badge badge-info badge-sm">{channelNameById.get(o.channelId) || 'channel'}</span>
+                    {:else}
+                      <span class="badge badge-ghost badge-sm">All channels</span>
+                    {/if}
+                  </td>
                   <td>
                     <input type="checkbox" class="toggle toggle-sm toggle-success" checked={o.enabled} on:change={() => toggleOrigin(o)} />
                   </td>
@@ -560,7 +596,7 @@
                   </td>
                 </tr>
               {:else}
-                <tr><td colspan="5" class="text-center opacity-60 py-6">No origins. Stream is open to all.</td></tr>
+                <tr><td colspan="6" class="text-center opacity-60 py-6">No origins. Stream is open to all.</td></tr>
               {/each}
             </tbody>
           </table>

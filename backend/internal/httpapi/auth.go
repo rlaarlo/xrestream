@@ -53,16 +53,33 @@ func (c *authCache) drop(token string) {
 	delete(c.set, token)
 }
 
-// originCache memoises the enabled-origin set from the database with a short
-// TTL so withCORS doesn't hit the DB on every preflight.
+// originCache memoises enabled-origin sets from the database with a short
+// TTL so withCORS / referer gating don't hit the DB on every request. It
+// holds both the global enabled-origin set (used by CORS) and per-owner
+// sets (used by per-channel referer gating).
 type originCache struct {
-	mu      sync.RWMutex
+	mu         sync.RWMutex
+	set        map[string]struct{}
+	expires    time.Time
+	owners     map[string]ownerOriginEntry
+	channels   map[string]ownerOriginEntry
+	ownerTTL   time.Duration
+	channelTTL time.Duration
+}
+
+type ownerOriginEntry struct {
 	set     map[string]struct{}
 	expires time.Time
 }
 
 func newOriginCache() *originCache {
-	return &originCache{set: make(map[string]struct{})}
+	return &originCache{
+		set:        make(map[string]struct{}),
+		owners:     make(map[string]ownerOriginEntry),
+		channels:   make(map[string]ownerOriginEntry),
+		ownerTTL:   30 * time.Second,
+		channelTTL: 30 * time.Second,
+	}
 }
 
 func (c *originCache) get(ctx context.Context, store *store.Store) map[string]struct{} {
@@ -91,10 +108,76 @@ func (c *originCache) get(ctx context.Context, store *store.Store) map[string]st
 	return c.set
 }
 
+// getForOwner returns the cached enabled-origin set for a single owner,
+// refreshing from the DB when the per-owner entry is missing or expired.
+// Returns an empty (non-nil) map when the owner has no entries or on error
+// so callers can treat "len == 0" as "no whitelist configured for owner".
+func (c *originCache) getForOwner(ctx context.Context, store *store.Store, ownerID string) map[string]struct{} {
+	if ownerID == "" {
+		return map[string]struct{}{}
+	}
+	c.mu.RLock()
+	if e, ok := c.owners[ownerID]; ok && time.Now().Before(e.expires) {
+		m := e.set
+		c.mu.RUnlock()
+		return m
+	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.owners[ownerID]; ok && time.Now().Before(e.expires) {
+		return e.set
+	}
+	list, err := store.ListEnabledOriginsForOwner(ctx, ownerID)
+	m := map[string]struct{}{}
+	if err == nil {
+		for _, o := range list {
+			m[strings.ToLower(o)] = struct{}{}
+		}
+	}
+	c.owners[ownerID] = ownerOriginEntry{set: m, expires: time.Now().Add(c.ownerTTL)}
+	return m
+}
+
 func (c *originCache) invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.expires = time.Time{}
+	c.owners = make(map[string]ownerOriginEntry)
+	c.channels = make(map[string]ownerOriginEntry)
+}
+
+// getForChannel returns the cached effective enabled-origin set for a single
+// channel (channel-scoped entries unioned with owner-wide ones). Used by
+// per-channel referer gating. Returns an empty (non-nil) map when there is
+// no whitelist or on error so callers treat "len == 0" as "open".
+func (c *originCache) getForChannel(ctx context.Context, st *store.Store, channelID, ownerID string) map[string]struct{} {
+	if channelID == "" {
+		return c.getForOwner(ctx, st, ownerID)
+	}
+	c.mu.RLock()
+	if e, ok := c.channels[channelID]; ok && time.Now().Before(e.expires) {
+		m := e.set
+		c.mu.RUnlock()
+		return m
+	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.channels[channelID]; ok && time.Now().Before(e.expires) {
+		return e.set
+	}
+	list, err := st.ListEnabledOriginsForChannel(ctx, channelID, ownerID)
+	m := map[string]struct{}{}
+	if err == nil {
+		for _, o := range list {
+			m[strings.ToLower(o)] = struct{}{}
+		}
+	}
+	c.channels[channelID] = ownerOriginEntry{set: m, expires: time.Now().Add(c.channelTTL)}
+	return m
 }
 
 func newSessionToken() string {

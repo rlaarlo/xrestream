@@ -87,6 +87,7 @@ export async function mintPlaybackToken(channelId: string) {
 export type AllowedOrigin = {
   id: string;
   ownerId?: string | null;
+  channelId?: string | null;
   origin: string;
   label: string;
   enabled: boolean;
@@ -94,8 +95,11 @@ export type AllowedOrigin = {
 };
 
 export const listOrigins = () => apiFetch<AllowedOrigin[]>('/me/origins');
-export const createOrigin = (origin: string, label = '') =>
-  apiFetch<AllowedOrigin>('/me/origins', { method: 'POST', body: JSON.stringify({ origin, label }) });
+export const createOrigin = (origin: string, label = '', channelId: string | null = null) =>
+  apiFetch<AllowedOrigin>('/me/origins', {
+    method: 'POST',
+    body: JSON.stringify({ origin, label, channelId: channelId ?? '' })
+  });
 export const updateOrigin = (id: string, label: string, enabled: boolean) =>
   apiFetch<AllowedOrigin>(`/me/origins/${id}`, { method: 'PATCH', body: JSON.stringify({ label, enabled }) });
 export const deleteOrigin = (id: string) =>

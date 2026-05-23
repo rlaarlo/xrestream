@@ -66,6 +66,7 @@ type Metrics struct {
 type AllowedOrigin struct {
 	ID        string    `json:"id"`
 	OwnerID   *string   `json:"ownerId,omitempty"`
+	ChannelID *string   `json:"channelId,omitempty"`
 	Origin    string    `json:"origin"`
 	Label     string    `json:"label"`
 	Enabled   bool      `json:"enabled"`

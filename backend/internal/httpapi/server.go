@@ -765,6 +765,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := parts[0]
+	if !s.refererGateForSlug(w, r, slug) {
+		return
+	}
 	if parts[1] == "index.m3u8" {
 		s.serveProxyPlaylist(w, r, slug)
 		return
@@ -1142,6 +1145,128 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// originOf returns "scheme://host" (lowercase) for a URL string, or "" on
+// parse failure / missing host. Used by referer/origin gating.
+func originOf(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme + "://" + u.Host)
+}
+
+// refererOrigin extracts the origin ("scheme://host") from the request
+// Referer header. Returns "" if absent or malformed.
+func refererOrigin(r *http.Request) string {
+	return originOf(r.Header.Get("Referer"))
+}
+
+// refererAllowed reports whether the request Referer matches an enabled
+// allowed_origin (or the public stream URL itself, so hls.js requests issued
+// from /embed to /share still pass). Scope precedence:
+//   - channelID non-empty: channel-scoped union (channel + owner-wide) entries
+//   - channelID empty, ownerID non-empty: owner-wide entries only
+//   - both empty: global whitelist
+// When the resolved whitelist is empty the system is "open" for back-compat.
+func (s *Server) refererAllowed(r *http.Request, channelID, ownerID string) bool {
+	var enabled map[string]struct{}
+	switch {
+	case channelID != "":
+		enabled = s.origins.getForChannel(s.rootCtx, s.store, channelID, ownerID)
+	case ownerID != "":
+		enabled = s.origins.getForOwner(s.rootCtx, s.store, ownerID)
+	default:
+		enabled = s.origins.get(s.rootCtx, s.store)
+	}
+	if len(enabled) == 0 {
+		return true
+	}
+	ro := refererOrigin(r)
+	if ro == "" {
+		return false
+	}
+	if _, ok := enabled[ro]; ok {
+		return true
+	}
+	if self := originOf(s.cfg.PublicStreamURL); self != "" && ro == self {
+		return true
+	}
+	return false
+}
+
+// refererGate enforces refererAllowed on a request using the global whitelist.
+// Admin/service sessions always bypass (so the dashboard, agent, and cURL
+// with a bearer token still work). Writes 403 and returns false when the
+// referer is rejected.
+func (s *Server) refererGate(w http.ResponseWriter, r *http.Request) bool {
+	return s.refererGateForScope(w, r, "", "")
+}
+
+// refererGateForOwner scopes the check to a single owner's allowed-origin
+// list (owner-wide entries only, channel-scoped entries are ignored).
+func (s *Server) refererGateForOwner(w http.ResponseWriter, r *http.Request, ownerID string) bool {
+	return s.refererGateForScope(w, r, "", ownerID)
+}
+
+// refererGateForScope scopes the check by channel and/or owner. See
+// refererAllowed for the precedence rules. Admin/service sessions bypass.
+func (s *Server) refererGateForScope(w http.ResponseWriter, r *http.Request, channelID, ownerID string) bool {
+	if _, ok := s.currentSession(r); ok {
+		return true
+	}
+	if s.refererAllowed(r, channelID, ownerID) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "referer not allowed")
+	return false
+}
+
+// refererGateForSlug resolves the channel by slug to obtain its ID + owner,
+// then applies refererGateForScope so per-channel whitelists take effect.
+// Falls back to the global gate when the slug cannot be resolved.
+func (s *Server) refererGateForSlug(w http.ResponseWriter, r *http.Request, slug string) bool {
+	if _, ok := s.currentSession(r); ok {
+		return true
+	}
+	channelID, ownerID := "", ""
+	if slug != "" {
+		if ch, err := s.store.GetChannelBySlug(r.Context(), slug); err == nil {
+			channelID = ch.ID
+			if ch.OwnerID != nil {
+				ownerID = *ch.OwnerID
+			}
+		}
+	}
+	return s.refererGateForScope(w, r, channelID, ownerID)
+}
+
+// frameAncestorsCSP returns a Content-Security-Policy value restricting which
+// origins may embed /embed pages in an <iframe>. Scope precedence matches
+// refererAllowed. Returns "" when no origins are whitelisted so callers can
+// skip setting the header (open by default).
+func (s *Server) frameAncestorsCSP(channelID, ownerID string) string {
+	var enabled map[string]struct{}
+	switch {
+	case channelID != "":
+		enabled = s.origins.getForChannel(s.rootCtx, s.store, channelID, ownerID)
+	case ownerID != "":
+		enabled = s.origins.getForOwner(s.rootCtx, s.store, ownerID)
+	default:
+		enabled = s.origins.get(s.rootCtx, s.store)
+	}
+	if len(enabled) == 0 {
+		return ""
+	}
+	sources := []string{"'self'"}
+	for o := range enabled {
+		sources = append(sources, o)
+	}
+	return "frame-ancestors " + strings.Join(sources, " ")
+}
+
 func (s *Server) handlePlaybackToken(w http.ResponseWriter, r *http.Request, id string) {
 	if !s.requireAdmin(w, r) {
 		return
@@ -1225,6 +1350,9 @@ func (s *Server) share(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "invalid signature")
 		return
 	}
+	if !s.refererGateForSlug(w, r, slug) {
+		return
+	}
 	if parts[1] == "index.m3u8" {
 		playlist, channelID, err := s.relay.ServePlaylist(r.Context(), slug)
 		if err != nil {
@@ -1268,18 +1396,33 @@ func (s *Server) embed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
+	channelID, ownerID := "", ""
+	if ch, err := s.store.GetChannelBySlug(r.Context(), slug); err == nil {
+		channelID = ch.ID
+		if ch.OwnerID != nil {
+			ownerID = *ch.OwnerID
+		}
+	}
+	if !s.refererGateForScope(w, r, channelID, ownerID) {
+		return
+	}
 	exp := r.URL.Query().Get("exp")
 	sig := r.URL.Query().Get("sig")
 	base := strings.TrimRight(s.cfg.PublicStreamURL, "/")
 	playlistURL := fmt.Sprintf("%s/share/%s/index.m3u8?exp=%s&sig=%s",
 		base, url.PathEscape(slug), url.QueryEscape(exp), url.QueryEscape(sig))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	if csp := s.frameAncestorsCSP(channelID, ownerID); csp != "" {
+		w.Header().Set("Content-Security-Policy", csp)
+	}
 	fmt.Fprintf(w, embedHTMLTemplate, slug, playlistURL)
 }
 
 const embedHTMLTemplate = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="referrer" content="strict-origin-when-cross-origin"/>
 <title>%[1]s</title>
 <style>html,body{margin:0;height:100%%;background:#000}video{width:100%%;height:100%%;object-fit:contain;display:block}</style>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
