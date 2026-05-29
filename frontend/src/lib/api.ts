@@ -178,8 +178,34 @@ export const deleteR2Config = () =>
 
 const fallbackApiBase = 'http://localhost:3000';
 
-export function getApiBase() {
+let runtimeApiBase: string | null = null;
+let loadPromise: Promise<string> | null = null;
+
+export function getApiBase(): string {
+  if (runtimeApiBase) return runtimeApiBase;
   return import.meta.env.VITE_API_BASE_URL || fallbackApiBase;
+}
+
+export function loadApiBase(): Promise<string> {
+  if (runtimeApiBase) return Promise.resolve(runtimeApiBase);
+  if (loadPromise) return loadPromise;
+  loadPromise = (async () => {
+    try {
+      const r = await fetch('/config.json', { cache: 'no-store' });
+      if (r.ok) {
+        const j = (await r.json()) as { apiBaseUrl?: string };
+        if (j && typeof j.apiBaseUrl === 'string' && j.apiBaseUrl) {
+          runtimeApiBase = j.apiBaseUrl;
+          return runtimeApiBase;
+        }
+      }
+    } catch {
+      // ignore, fall back to build-time env
+    }
+    runtimeApiBase = import.meta.env.VITE_API_BASE_URL || fallbackApiBase;
+    return runtimeApiBase;
+  })();
+  return loadPromise;
 }
 
 export function getStoredToken() {

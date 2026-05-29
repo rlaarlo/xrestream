@@ -1,6 +1,11 @@
 name = "restrea"
 compatibility_date = "2025-05-01"
+main = "src/worker.ts"
+
+[vars]
+API_BASE_URL = "https://mediastream.my.id"
 
 [assets]
 directory = "./build"
 not_found_handling = "single-page-application"
+binding = "ASSETS"
