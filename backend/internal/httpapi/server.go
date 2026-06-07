@@ -1472,7 +1472,24 @@ const embedHTMLTemplate = `<!doctype html>
 <video id="v" controls autoplay muted playsinline></video>
 <script>
 const url=%[2]q;const v=document.getElementById('v');
-if(window.Hls&&Hls.isSupported()){const h=new Hls({liveSyncDuration:6});h.loadSource(url);h.attachMedia(v);}
+if(window.Hls&&Hls.isSupported()){
+  const h=new Hls({
+    liveSyncDuration:6,
+    liveMaxLatencyDuration:18,
+    maxBufferLength:30,
+    maxMaxBufferLength:60,
+    backBufferLength:10,
+    lowLatencyMode:false,
+    enableWorker:true
+  });
+  h.loadSource(url);h.attachMedia(v);
+  h.on(Hls.Events.ERROR,(_,d)=>{
+    if(!d.fatal)return;
+    if(d.type===Hls.ErrorTypes.NETWORK_ERROR){h.startLoad();}
+    else if(d.type===Hls.ErrorTypes.MEDIA_ERROR){h.recoverMediaError();}
+    else{h.destroy();}
+  });
+}
 else if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=url;}
 else{document.body.innerHTML='<p style=color:#fff;font-family:sans-serif;padding:1rem>HLS not supported</p>';}
 </script></body></html>`

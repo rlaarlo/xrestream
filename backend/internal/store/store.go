@@ -458,7 +458,7 @@ func normalizeInput(input ChannelInput) ChannelInput {
 		input.AllowedOriginsBypass = &bypass
 	}
 	if input.SyncDelaySeconds <= 0 {
-		input.SyncDelaySeconds = 30
+		input.SyncDelaySeconds = 8
 	}
 	return input
 }

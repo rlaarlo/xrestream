@@ -93,7 +93,7 @@
       ingestPollSeconds: 2,
       cacheEnabled: true,
       syncEnabled: false,
-      syncDelaySeconds: 30,
+      syncDelaySeconds: 8,
       playbackTokenRequired: true,
       allowedOriginsBypass: false,
       httpReferer: '',
@@ -376,7 +376,12 @@
       fluid: true,
       liveui: false,
       html5: {
-        vhs: { overrideNative: true },
+        vhs: {
+          overrideNative: true,
+          enableLowInitialPlaylist: true,
+          smoothQualityChange: true,
+          handlePartialData: true
+        },
         nativeAudioTracks: false,
         nativeVideoTracks: false
       }

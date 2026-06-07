@@ -35,6 +35,7 @@ type Manager struct {
 
 	mu        sync.RWMutex
 	playlists map[string]cachedPlaylist
+	transmux  map[string]cachedPlaylist
 	assets    map[string]map[string]string
 	workers   map[string]*workerHandle
 	group     singleflight.Group
@@ -54,15 +55,31 @@ type workerHandle struct {
 }
 
 func NewManager(store ChannelStore, cfg config.Config, logger *slog.Logger, r2 *R2Client) *Manager {
+	timeout := time.Duration(cfg.UpstreamTimeoutMS) * time.Millisecond
+	// Reuse TCP+TLS for upstream playlist/segment fetches. Without this every
+	// 2-6s playlist poll opens a fresh socket — single biggest source of
+	// per-request latency at the relay's hot path.
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   16,
+		MaxConnsPerHost:       64,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: timeout,
+	}
 	return &Manager{
 		store:     store,
 		cfg:       cfg,
 		logger:    logger,
-		client:    &http.Client{Timeout: time.Duration(cfg.UpstreamTimeoutMS) * time.Millisecond},
+		client:    &http.Client{Timeout: timeout, Transport: transport},
 		signer:    NewSigner(cfg.SigningSecret),
 		cache:     NewDiskCache(cfg.CacheDir),
 		r2:        r2,
 		playlists: map[string]cachedPlaylist{},
+		transmux:  map[string]cachedPlaylist{},
 		assets:    map[string]map[string]string{},
 		workers:   map[string]*workerHandle{},
 		viewers:   map[string]map[string]time.Time{},
@@ -234,11 +251,34 @@ func (m *Manager) ServePlaylist(ctx context.Context, slug string) (string, strin
 	}
 
 	if channel.Mode == "transmux" {
-		playlist, err := m.readTransmuxPlaylist(channel)
+		// 1s in-memory cache + singleflight: collapses N concurrent viewer
+		// polls of the same channel into a single disk read of index.m3u8.
+		m.mu.RLock()
+		cached, ok := m.transmux[channel.Slug]
+		m.mu.RUnlock()
+		if ok && time.Now().Before(cached.expiresAt) {
+			return cached.body, channel.ID, nil
+		}
+		v, err, _ := m.group.Do("transmux:"+channel.Slug, func() (any, error) {
+			m.mu.RLock()
+			if c, ok := m.transmux[channel.Slug]; ok && time.Now().Before(c.expiresAt) {
+				m.mu.RUnlock()
+				return c.body, nil
+			}
+			m.mu.RUnlock()
+			pl, err := m.readTransmuxPlaylist(channel)
+			if err != nil {
+				return "", err
+			}
+			m.mu.Lock()
+			m.transmux[channel.Slug] = cachedPlaylist{body: pl, expiresAt: time.Now().Add(time.Second)}
+			m.mu.Unlock()
+			return pl, nil
+		})
 		if err != nil {
 			return "", channel.ID, err
 		}
-		return playlist, channel.ID, nil
+		return v.(string), channel.ID, nil
 	}
 
 	if channel.Mode == "ingest" {
@@ -299,7 +339,11 @@ func (m *Manager) ServeAsset(ctx context.Context, slug, ref, sig string) (*osFil
 
 	m.store.IncrementMetric(ctx, channel.ID, "cache_misses", 1)
 	if channel.Mode == "ingest" {
-		deadline := time.Now().Add(5 * time.Second)
+		// Wait briefly for the ingest worker (or another viewer's fetch) to
+		// populate the cache. Capping at 1.5s keeps a stalled source from
+		// stalling the player connection for 5s — the HLS client retries
+		// segments with its own backoff which is smoother than holding here.
+		deadline := time.Now().Add(1500 * time.Millisecond)
 		for time.Now().Before(deadline) {
 			if m.cache.HasFresh(slug, ref, channel.SegmentTTLSeconds) {
 				return m.openCachedAsset(slug, ref, sourceURL, channel.ID)
@@ -307,7 +351,7 @@ func (m *Manager) ServeAsset(ctx context.Context, slug, ref, sig string) (*osFil
 			select {
 			case <-ctx.Done():
 				return nil, channel.ID, ctx.Err()
-			case <-time.After(250 * time.Millisecond):
+			case <-time.After(150 * time.Millisecond):
 			}
 		}
 		return nil, channel.ID, errors.New("asset is not cached yet")
@@ -349,6 +393,7 @@ func (m *Manager) openCachedAsset(slug, ref, sourceURL, channelID string) (*osFi
 func (m *Manager) PurgeChannel(slug string) error {
 	m.mu.Lock()
 	delete(m.playlists, slug)
+	delete(m.transmux, slug)
 	delete(m.assets, slug)
 	m.mu.Unlock()
 	prefix := slug + ":"
@@ -637,7 +682,7 @@ func (m *Manager) readTransmuxPlaylist(channel store.Channel) (string, error) {
 	if syncOn {
 		delay := time.Duration(channel.SyncDelaySeconds) * time.Second
 		if delay <= 0 {
-			delay = 30 * time.Second
+			delay = 8 * time.Second
 		}
 		// Quantize to whole seconds so concurrent viewers compute identical cutoff.
 		cutoff = time.Now().Truncate(time.Second).Add(-delay)
