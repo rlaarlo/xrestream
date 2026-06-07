@@ -95,6 +95,7 @@
       syncEnabled: false,
       syncDelaySeconds: 30,
       playbackTokenRequired: true,
+      allowedOriginsBypass: false,
       httpReferer: '',
       httpUserAgent: '',
       httpOrigin: '',
@@ -240,6 +241,7 @@
       syncEnabled: channel.syncEnabled,
       syncDelaySeconds: channel.syncDelaySeconds,
       playbackTokenRequired: channel.playbackTokenRequired ?? true,
+      allowedOriginsBypass: channel.allowedOriginsBypass ?? false,
       nodeId: channel.nodeId ?? null,
       httpReferer: channel.httpReferer ?? '',
       httpUserAgent: channel.httpUserAgent ?? '',
@@ -268,6 +270,7 @@
           syncEnabled: next,
           syncDelaySeconds: channel.syncDelaySeconds,
           playbackTokenRequired: channel.playbackTokenRequired ?? true,
+          allowedOriginsBypass: channel.allowedOriginsBypass ?? false,
           httpReferer: channel.httpReferer ?? '',
           httpUserAgent: channel.httpUserAgent ?? '',
           httpOrigin: channel.httpOrigin ?? '',
@@ -371,7 +374,7 @@
       muted: true,
       preload: 'auto',
       fluid: true,
-      liveui: true,
+      liveui: false,
       html5: {
         vhs: { overrideNative: true },
         nativeAudioTracks: false,
@@ -1400,6 +1403,22 @@
                   When enabled, the HLS playlist URL must include a short-lived <code>exp</code>+<code>sig</code> token
                   (or a logged-in admin Bearer token). Disable to make the playlist publicly playable —
                   anyone with the URL can stream.
+                </p>
+              </div>
+
+              <div class="rounded-lg border border-base-300 p-3">
+                <label class="label cursor-pointer justify-start gap-3 p-0">
+                  <input
+                    class="toggle toggle-success toggle-sm"
+                    bind:checked={form.allowedOriginsBypass}
+                    type="checkbox"
+                  />
+                  <span class="label-text font-medium">Embeddable anywhere (bypass allowed origins)</span>
+                </label>
+                <p class="mt-1 text-xs text-base-content/60">
+                  When enabled, this channel ignores the per-user / per-channel Allowed Origins list:
+                  the share &amp; embed links can be played from any domain, with CORS open to all and
+                  no <code>frame-ancestors</code> restriction. Leave off to keep the whitelist enforced.
                 </p>
               </div>
 

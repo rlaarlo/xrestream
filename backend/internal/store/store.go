@@ -102,6 +102,7 @@ create unique index if not exists channel_metrics_channel_window_unique_idx on c
 		return err
 	}
 	_, _ = s.pool.Exec(ctx, `alter table channels add column if not exists playback_token_required boolean not null default true`)
+	_, _ = s.pool.Exec(ctx, `alter table channels add column if not exists allowed_origins_bypass boolean not null default false`)
 
 	_, err = s.pool.Exec(ctx, `
 create table if not exists allowed_origins (
@@ -270,10 +271,10 @@ func (s *Store) CreateChannel(ctx context.Context, input ChannelInput, publicStr
 		ownerArg = ownerID
 	}
 	row := s.pool.QueryRow(ctx, `
-insert into channels (name, slug, input_url, mode, status, playlist_url, playlist_ttl_seconds, segment_ttl_seconds, ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds, http_referer, http_user_agent, http_origin, playback_token_required, owner_id, node_id)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+insert into channels (name, slug, input_url, mode, status, playlist_url, playlist_ttl_seconds, segment_ttl_seconds, ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds, http_referer, http_user_agent, http_origin, playback_token_required, allowed_origins_bypass, owner_id, node_id)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 returning `+channelColumns,
-		input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds, input.HTTPReferer, input.HTTPUserAgent, input.HTTPOrigin, *input.PlaybackTokenRequired, ownerArg, input.NodeID)
+		input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds, input.HTTPReferer, input.HTTPUserAgent, input.HTTPOrigin, *input.PlaybackTokenRequired, *input.AllowedOriginsBypass, ownerArg, input.NodeID)
 	return scanChannel(row)
 }
 
@@ -299,10 +300,11 @@ update channels set
   http_origin = $16,
   node_id = $17,
   playback_token_required = $18,
+  allowed_origins_bypass = $19,
   updated_at = now()
 where id = $1
 returning `+channelColumns,
-		id, input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds, input.HTTPReferer, input.HTTPUserAgent, input.HTTPOrigin, input.NodeID, *input.PlaybackTokenRequired)
+		id, input.Name, input.Slug, input.InputURL, input.Mode, input.Status, playlistURL, input.PlaylistTTLSeconds, input.SegmentTTLSeconds, input.IngestPollSeconds, *input.CacheEnabled, *input.SyncEnabled, input.SyncDelaySeconds, input.HTTPReferer, input.HTTPUserAgent, input.HTTPOrigin, input.NodeID, *input.PlaybackTokenRequired, *input.AllowedOriginsBypass)
 	return scanChannel(row)
 }
 
@@ -377,7 +379,7 @@ where channel_id = $1 and window_start > now() - interval '1 hour'`, channelID)
 }
 
 const channelColumns = `id, name, slug, input_url, mode, status, worker_status, playback_token, playlist_url, playlist_ttl_seconds, segment_ttl_seconds,
-	ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds, http_referer, http_user_agent, http_origin, playback_token_required, owner_id, node_id, last_request_at, last_source_fetch_at, last_source_status, last_error, worker_started_at, created_at, updated_at`
+	ingest_poll_seconds, cache_enabled, sync_enabled, sync_delay_seconds, http_referer, http_user_agent, http_origin, playback_token_required, allowed_origins_bypass, owner_id, node_id, last_request_at, last_source_fetch_at, last_source_status, last_error, worker_started_at, created_at, updated_at`
 
 const baseChannelSelect = `select ` + channelColumns + ` from channels`
 
@@ -403,6 +405,7 @@ func scanChannel(row pgx.Row) (Channel, error) {
 		&channel.HTTPUserAgent,
 		&channel.HTTPOrigin,
 		&channel.PlaybackTokenRequired,
+		&channel.AllowedOriginsBypass,
 		&channel.OwnerID,
 		&channel.NodeID,
 		&channel.LastRequestAt,
@@ -449,6 +452,10 @@ func normalizeInput(input ChannelInput) ChannelInput {
 	if input.PlaybackTokenRequired == nil {
 		required := true
 		input.PlaybackTokenRequired = &required
+	}
+	if input.AllowedOriginsBypass == nil {
+		bypass := false
+		input.AllowedOriginsBypass = &bypass
 	}
 	if input.SyncDelaySeconds <= 0 {
 		input.SyncDelaySeconds = 30

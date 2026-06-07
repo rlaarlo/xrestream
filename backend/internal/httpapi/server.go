@@ -719,6 +719,7 @@ func (s *Server) handleChannelRecord(w http.ResponseWriter, r *http.Request, id 
 			serverError(w, err)
 			return
 		}
+		s.origins.invalidateSlugBypass(channel.Slug)
 		s.relay.StopWorker(id)
 		if channel.NodeID == nil || *channel.NodeID == "" {
 			if (channel.Mode == "ingest" || channel.Mode == "transmux") && channel.Status == "active" {
@@ -739,6 +740,7 @@ func (s *Server) handleChannelRecord(w http.ResponseWriter, r *http.Request, id 
 			serverError(w, err)
 			return
 		}
+		s.origins.invalidateSlugBypass(channel.Slug)
 		writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 	default:
 		methodNotAllowed(w)
@@ -1009,19 +1011,36 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			strings.HasPrefix(r.URL.Path, "/share/") ||
 			strings.HasPrefix(r.URL.Path, "/embed/")
 
-		allowSet := map[string]struct{}{}
+		// Per-channel bypass: any /proxy|/share|/embed/<slug>/... whose
+		// channel has allowed_origins_bypass=true is publicly playable, so
+		// CORS must allow any origin (echo when one is sent so credentialed
+		// requests still work).
+		bypass := false
 		if isStream {
+			if slug := streamSlugFromPath(r.URL.Path); slug != "" {
+				bypass = s.origins.channelBypass(s.rootCtx, s.store, slug)
+			}
+		}
+
+		allowSet := map[string]struct{}{}
+		if isStream && !bypass {
 			for k := range s.origins.get(s.rootCtx, s.store) {
 				allowSet[k] = struct{}{}
 			}
-		} else {
+		} else if !isStream {
 			for _, o := range s.cfg.AdminUIOrigins {
 				allowSet[strings.ToLower(strings.TrimRight(o, "/"))] = struct{}{}
 			}
 		}
 
 		allow := ""
-		if len(allowSet) == 0 {
+		if bypass {
+			if origin != "" {
+				allow = origin
+			} else {
+				allow = "*"
+			}
+		} else if len(allowSet) == 0 {
 			// Stream open-by-default when no DB entries; UI never falls back to *
 			// unless admin explicitly leaves ADMIN_UI_ORIGINS empty.
 			allow = "*"
@@ -1158,6 +1177,21 @@ func originOf(raw string) string {
 	return strings.ToLower(u.Scheme + "://" + u.Host)
 }
 
+// streamSlugFromPath extracts <slug> from /proxy/<slug>/..., /share/<slug>/...
+// or /embed/<slug>(/...) request paths. Returns "" if no slug is present.
+func streamSlugFromPath(p string) string {
+	for _, prefix := range []string{"/proxy/", "/share/", "/embed/"} {
+		if strings.HasPrefix(p, prefix) {
+			rest := strings.TrimPrefix(p, prefix)
+			if i := strings.IndexByte(rest, '/'); i >= 0 {
+				return rest[:i]
+			}
+			return rest
+		}
+	}
+	return ""
+}
+
 // refererOrigin extracts the origin ("scheme://host") from the request
 // Referer header. Returns "" if absent or malformed.
 func refererOrigin(r *http.Request) string {
@@ -1170,6 +1204,7 @@ func refererOrigin(r *http.Request) string {
 //   - channelID non-empty: channel-scoped union (channel + owner-wide) entries
 //   - channelID empty, ownerID non-empty: owner-wide entries only
 //   - both empty: global whitelist
+//
 // When the resolved whitelist is empty the system is "open" for back-compat.
 func (s *Server) refererAllowed(r *http.Request, channelID, ownerID string) bool {
 	var enabled map[string]struct{}
@@ -1229,6 +1264,9 @@ func (s *Server) refererGateForScope(w http.ResponseWriter, r *http.Request, cha
 // Falls back to the global gate when the slug cannot be resolved.
 func (s *Server) refererGateForSlug(w http.ResponseWriter, r *http.Request, slug string) bool {
 	if _, ok := s.currentSession(r); ok {
+		return true
+	}
+	if slug != "" && s.origins.channelBypass(s.rootCtx, s.store, slug) {
 		return true
 	}
 	channelID, ownerID := "", ""
@@ -1397,13 +1435,15 @@ func (s *Server) embed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channelID, ownerID := "", ""
+	bypass := false
 	if ch, err := s.store.GetChannelBySlug(r.Context(), slug); err == nil {
 		channelID = ch.ID
 		if ch.OwnerID != nil {
 			ownerID = *ch.OwnerID
 		}
+		bypass = ch.AllowedOriginsBypass
 	}
-	if !s.refererGateForScope(w, r, channelID, ownerID) {
+	if !bypass && !s.refererGateForScope(w, r, channelID, ownerID) {
 		return
 	}
 	exp := r.URL.Query().Get("exp")
@@ -1413,8 +1453,10 @@ func (s *Server) embed(w http.ResponseWriter, r *http.Request) {
 		base, url.PathEscape(slug), url.QueryEscape(exp), url.QueryEscape(sig))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	if csp := s.frameAncestorsCSP(channelID, ownerID); csp != "" {
-		w.Header().Set("Content-Security-Policy", csp)
+	if !bypass {
+		if csp := s.frameAncestorsCSP(channelID, ownerID); csp != "" {
+			w.Header().Set("Content-Security-Policy", csp)
+		}
 	}
 	fmt.Fprintf(w, embedHTMLTemplate, slug, playlistURL)
 }

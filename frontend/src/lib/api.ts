@@ -14,6 +14,7 @@ export type Channel = {
   syncEnabled: boolean;
   syncDelaySeconds: number;
   playbackTokenRequired: boolean;
+  allowedOriginsBypass: boolean;
   httpReferer: string;
   httpUserAgent: string;
   httpOrigin: string;
@@ -41,6 +42,7 @@ export type ChannelInput = {
   syncEnabled: boolean;
   syncDelaySeconds: number;
   playbackTokenRequired: boolean;
+  allowedOriginsBypass: boolean;
   httpReferer: string;
   httpUserAgent: string;
   httpOrigin: string;

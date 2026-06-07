@@ -3,53 +3,55 @@ package store
 import "time"
 
 type Channel struct {
-	ID                 string     `json:"id"`
-	Name               string     `json:"name"`
-	Slug               string     `json:"slug"`
-	InputURL           string     `json:"inputUrl"`
-	Mode               string     `json:"mode"`
-	Status             string     `json:"status"`
-	WorkerStatus       string     `json:"workerStatus"`
-	PlaybackToken      *string    `json:"playbackToken,omitempty"`
-	PlaylistURL        *string    `json:"playlistUrl,omitempty"`
-	PlaylistTTLSeconds int        `json:"playlistTtlSeconds"`
-	SegmentTTLSeconds  int        `json:"segmentTtlSeconds"`
-	IngestPollSeconds  int        `json:"ingestPollSeconds"`
-	CacheEnabled          bool    `json:"cacheEnabled"`
-	SyncEnabled           bool    `json:"syncEnabled"`
-	SyncDelaySeconds      int     `json:"syncDelaySeconds"`
-	PlaybackTokenRequired bool    `json:"playbackTokenRequired"`
-	HTTPReferer        string     `json:"httpReferer"`
-	HTTPUserAgent      string     `json:"httpUserAgent"`
-	HTTPOrigin         string     `json:"httpOrigin"`
-	OwnerID            *string    `json:"ownerId,omitempty"`
-	NodeID             *string    `json:"nodeId,omitempty"`
-	LastRequestAt      *time.Time `json:"lastRequestAt,omitempty"`
-	LastSourceFetchAt  *time.Time `json:"lastSourceFetchAt,omitempty"`
-	LastSourceStatus   *int       `json:"lastSourceStatus,omitempty"`
-	LastError          *string    `json:"lastError,omitempty"`
-	WorkerStartedAt    *time.Time `json:"workerStartedAt,omitempty"`
-	CreatedAt          time.Time  `json:"createdAt"`
-	UpdatedAt          time.Time  `json:"updatedAt"`
+	ID                    string     `json:"id"`
+	Name                  string     `json:"name"`
+	Slug                  string     `json:"slug"`
+	InputURL              string     `json:"inputUrl"`
+	Mode                  string     `json:"mode"`
+	Status                string     `json:"status"`
+	WorkerStatus          string     `json:"workerStatus"`
+	PlaybackToken         *string    `json:"playbackToken,omitempty"`
+	PlaylistURL           *string    `json:"playlistUrl,omitempty"`
+	PlaylistTTLSeconds    int        `json:"playlistTtlSeconds"`
+	SegmentTTLSeconds     int        `json:"segmentTtlSeconds"`
+	IngestPollSeconds     int        `json:"ingestPollSeconds"`
+	CacheEnabled          bool       `json:"cacheEnabled"`
+	SyncEnabled           bool       `json:"syncEnabled"`
+	SyncDelaySeconds      int        `json:"syncDelaySeconds"`
+	PlaybackTokenRequired bool       `json:"playbackTokenRequired"`
+	AllowedOriginsBypass  bool       `json:"allowedOriginsBypass"`
+	HTTPReferer           string     `json:"httpReferer"`
+	HTTPUserAgent         string     `json:"httpUserAgent"`
+	HTTPOrigin            string     `json:"httpOrigin"`
+	OwnerID               *string    `json:"ownerId,omitempty"`
+	NodeID                *string    `json:"nodeId,omitempty"`
+	LastRequestAt         *time.Time `json:"lastRequestAt,omitempty"`
+	LastSourceFetchAt     *time.Time `json:"lastSourceFetchAt,omitempty"`
+	LastSourceStatus      *int       `json:"lastSourceStatus,omitempty"`
+	LastError             *string    `json:"lastError,omitempty"`
+	WorkerStartedAt       *time.Time `json:"workerStartedAt,omitempty"`
+	CreatedAt             time.Time  `json:"createdAt"`
+	UpdatedAt             time.Time  `json:"updatedAt"`
 }
 
 type ChannelInput struct {
-	Name               string `json:"name"`
-	Slug               string `json:"slug"`
-	InputURL           string `json:"inputUrl"`
-	Mode               string `json:"mode"`
-	Status             string `json:"status"`
-	PlaylistTTLSeconds int    `json:"playlistTtlSeconds"`
-	SegmentTTLSeconds  int    `json:"segmentTtlSeconds"`
-	IngestPollSeconds  int    `json:"ingestPollSeconds"`
-	CacheEnabled          *bool  `json:"cacheEnabled"`
-	SyncEnabled           *bool  `json:"syncEnabled"`
-	SyncDelaySeconds      int    `json:"syncDelaySeconds"`
-	PlaybackTokenRequired *bool  `json:"playbackTokenRequired"`
-	HTTPReferer        string  `json:"httpReferer"`
-	HTTPUserAgent      string  `json:"httpUserAgent"`
-	HTTPOrigin         string  `json:"httpOrigin"`
-	NodeID             *string `json:"nodeId,omitempty"`
+	Name                  string  `json:"name"`
+	Slug                  string  `json:"slug"`
+	InputURL              string  `json:"inputUrl"`
+	Mode                  string  `json:"mode"`
+	Status                string  `json:"status"`
+	PlaylistTTLSeconds    int     `json:"playlistTtlSeconds"`
+	SegmentTTLSeconds     int     `json:"segmentTtlSeconds"`
+	IngestPollSeconds     int     `json:"ingestPollSeconds"`
+	CacheEnabled          *bool   `json:"cacheEnabled"`
+	SyncEnabled           *bool   `json:"syncEnabled"`
+	SyncDelaySeconds      int     `json:"syncDelaySeconds"`
+	PlaybackTokenRequired *bool   `json:"playbackTokenRequired"`
+	AllowedOriginsBypass  *bool   `json:"allowedOriginsBypass"`
+	HTTPReferer           string  `json:"httpReferer"`
+	HTTPUserAgent         string  `json:"httpUserAgent"`
+	HTTPOrigin            string  `json:"httpOrigin"`
+	NodeID                *string `json:"nodeId,omitempty"`
 }
 
 type Metrics struct {
@@ -74,13 +76,13 @@ type AllowedOrigin struct {
 }
 
 type User struct {
-	ID           string     `json:"id"`
-	Username     string     `json:"username"`
-	Role         string     `json:"role"`
-	Enabled      bool       `json:"enabled"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
-	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty"`
+	ID          string     `json:"id"`
+	Username    string     `json:"username"`
+	Role        string     `json:"role"`
+	Enabled     bool       `json:"enabled"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
 }
 
 type Node struct {

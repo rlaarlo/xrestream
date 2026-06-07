@@ -63,12 +63,19 @@ type originCache struct {
 	expires    time.Time
 	owners     map[string]ownerOriginEntry
 	channels   map[string]ownerOriginEntry
+	slugBypass map[string]slugBypassEntry
 	ownerTTL   time.Duration
 	channelTTL time.Duration
+	bypassTTL  time.Duration
 }
 
 type ownerOriginEntry struct {
 	set     map[string]struct{}
+	expires time.Time
+}
+
+type slugBypassEntry struct {
+	bypass  bool
 	expires time.Time
 }
 
@@ -77,8 +84,10 @@ func newOriginCache() *originCache {
 		set:        make(map[string]struct{}),
 		owners:     make(map[string]ownerOriginEntry),
 		channels:   make(map[string]ownerOriginEntry),
+		slugBypass: make(map[string]slugBypassEntry),
 		ownerTTL:   30 * time.Second,
 		channelTTL: 30 * time.Second,
+		bypassTTL:  15 * time.Second,
 	}
 }
 
@@ -146,6 +155,49 @@ func (c *originCache) invalidate() {
 	c.expires = time.Time{}
 	c.owners = make(map[string]ownerOriginEntry)
 	c.channels = make(map[string]ownerOriginEntry)
+}
+
+// invalidateSlugBypass drops the cached allowed-origins bypass flag for the
+// given slug (or all slugs when slug == ""). Called after channel writes so
+// toggle changes take effect immediately instead of waiting for the TTL.
+func (c *originCache) invalidateSlugBypass(slug string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if slug == "" {
+		c.slugBypass = make(map[string]slugBypassEntry)
+		return
+	}
+	delete(c.slugBypass, slug)
+}
+
+// channelBypass reports whether the channel identified by slug has the
+// allowed_origins enforcement bypass enabled. The result is cached for a
+// short TTL so hot-path CORS / referer checks don't hit the DB on every
+// stream request. Returns false on lookup error (fail-closed for the
+// bypass-grant decision).
+func (c *originCache) channelBypass(ctx context.Context, st *store.Store, slug string) bool {
+	if slug == "" || st == nil {
+		return false
+	}
+	c.mu.RLock()
+	if e, ok := c.slugBypass[slug]; ok && time.Now().Before(e.expires) {
+		b := e.bypass
+		c.mu.RUnlock()
+		return b
+	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.slugBypass[slug]; ok && time.Now().Before(e.expires) {
+		return e.bypass
+	}
+	bypass := false
+	if ch, err := st.GetChannelBySlug(ctx, slug); err == nil {
+		bypass = ch.AllowedOriginsBypass
+	}
+	c.slugBypass[slug] = slugBypassEntry{bypass: bypass, expires: time.Now().Add(c.bypassTTL)}
+	return bypass
 }
 
 // getForChannel returns the cached effective enabled-origin set for a single
