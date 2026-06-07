@@ -940,9 +940,17 @@ func (m *Manager) transmuxLoop(ctx context.Context, channel store.Channel, handl
 			"-fflags", "+genpts+igndts",
 			"-err_detect", "ignore_err",
 			"-rw_timeout", "30000000",
-			// Let the Go manager restart ffmpeg on source EOF/network error.
-			// In-process -reconnect_at_eof/-reconnect_on_* trigger a seek-based
-			// HTTP reconnect that can segfault on chunked-encoding edge cases.
+			// HTTP source resilience: keep the TCP socket alive when the upstream
+			// closes mid-stream (common with IPTV / xtream-codes). Without this
+			// ffmpeg exits on every EOF and we restart it, which writes a fresh
+			// HLS init with #EXT-X-DISCONTINUITY -> browsers re-buffer hard.
+			// We deliberately skip -reconnect_at_eof and -reconnect_on_* because
+			// those use seek-based reconnect that has segfaulted on chunked
+			// transfer-encoding sources in past tests.
+			"-reconnect", "1",
+			"-reconnect_streamed", "1",
+			"-reconnect_delay_max", "4",
+			// Let the Go manager restart ffmpeg only as a last resort.
 		}
 		userAgent := strings.TrimSpace(channel.HTTPUserAgent)
 		if userAgent == "" {

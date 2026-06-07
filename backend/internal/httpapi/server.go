@@ -1474,10 +1474,9 @@ const embedHTMLTemplate = `<!doctype html>
 const url=%[2]q;const v=document.getElementById('v');
 if(window.Hls&&Hls.isSupported()){
   const h=new Hls({
-    liveSyncDuration:6,
-    liveMaxLatencyDuration:18,
+    liveSyncDurationCount:3,
+    liveMaxLatencyDurationCount:10,
     maxBufferLength:30,
-    maxMaxBufferLength:60,
     backBufferLength:10,
     lowLatencyMode:false,
     enableWorker:true

@@ -378,9 +378,7 @@
       html5: {
         vhs: {
           overrideNative: true,
-          enableLowInitialPlaylist: true,
-          smoothQualityChange: true,
-          handlePartialData: true
+          enableLowInitialPlaylist: true
         },
         nativeAudioTracks: false,
         nativeVideoTracks: false
